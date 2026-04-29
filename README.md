@@ -34,6 +34,14 @@ npm run test
 npm run build
 ```
 
+## macOS Package
+
+```bash
+make build
+```
+
+The package is written to `dist/` as a `.pkg` installer and a `.zip` containing the macOS app. Local builds are unsigned unless a Developer ID signing identity is configured on the machine.
+
 ## Manual Acceptance
 
 1. Start the app with `npm run dev`.

@@ -1,7 +1,9 @@
 {
   "name": "ai-terminal",
+  "productName": "AI Terminal",
   "version": "0.1.0",
   "description": "Warp-like desktop terminal with OpenAI-compatible LLM assistance.",
+  "author": "Doka-NT",
   "private": true,
   "main": "./out/main/index.js",
   "type": "module",
@@ -9,6 +11,7 @@
     "postinstall": "node scripts/fix-node-pty-permissions.mjs",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
+    "package:mac": "npm run build && COPYFILE_DISABLE=1 electron-builder --mac",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "eslint src tests electron.vite.config.ts vitest.config.ts"
@@ -32,6 +35,7 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
@@ -40,5 +44,36 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.1",
     "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "com.dokant.aiterminal",
+    "productName": "AI Terminal",
+    "directories": {
+      "output": "dist"
+    },
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/keytar/**/*",
+      "node_modules/node-pty/**/*"
+    ],
+    "afterPack": "scripts/after-pack.cjs",
+    "npmRebuild": false,
+    "nativeRebuilder": null,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "target": [
+        "pkg",
+        "zip"
+      ]
+    },
+    "pkg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
   }
 }
