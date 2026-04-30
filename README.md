@@ -14,6 +14,8 @@
   <img alt="macOS" src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple&logoColor=white">
   <img alt="Electron" src="https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white">
+  <img alt="License" src="https://img.shields.io/github/license/Doka-NT/ai-terminal">
+  <img alt="Stars" src="https://img.shields.io/github/stars/Doka-NT/ai-terminal?style=social">
 </p>
 
 <p align="center">
