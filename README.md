@@ -1,23 +1,59 @@
 # AI Terminal
 
-A macOS-first Warp-like terminal MVP built with Electron, React, TypeScript, `xterm.js`, `node-pty`, system OpenSSH, and an OpenAI-compatible LLM backend.
+<p align="center">
+  <img src="docs/media/ai-terminal-icon.png" alt="AI Terminal app icon" width="96" height="96">
+</p>
 
-## Current MVP
+<p align="center">
+  <strong>A macOS terminal with an AI agent beside your shell.</strong>
+  <br>
+  Real local PTY sessions, SSH that respects your existing setup, and an assistant that can read context, propose commands, and run safe steps with approval when needed.
+</p>
 
-- Local shell sessions through a real PTY.
-- SSH sessions through the system `ssh` binary, so `~/.ssh/config`, ssh-agent, keys, and ProxyJump keep working normally.
-- Right-side LLM panel with read-only context mode and agent mode.
+![AI Terminal screenshot](docs/media/ai-terminal-screenshot.png)
+
+## Demo
+
+![AI Terminal agent mode demo](docs/media/ai-terminal-demo.gif)
+
+## Why AI Terminal
+
+AI Terminal is a desktop terminal for developers who want LLM help without giving up a real shell. It keeps the terminal local and familiar, then adds a focused assistant panel for reading output, explaining commands, and helping automate small workflows.
+
+The app is built for macOS first. Local sessions run through `node-pty`, SSH uses the system `ssh` binary, and provider configuration works with OpenAI-compatible APIs.
+
+## Highlights
+
+- Real local terminal sessions with `xterm.js` and `node-pty`.
+- SSH connections through system OpenSSH, including `~/.ssh/config`, ssh-agent, keys, and ProxyJump.
+- Right-side assistant panel that can use selected text and recent terminal output as context.
+- Read-only mode for explanations and command suggestions.
+- Agent mode for step-by-step command execution in the active terminal.
+- In-app confirmation before risky commands are run.
+- Runnable fenced shell blocks in assistant replies.
+- Markdown-ish assistant rendering, including tables and code blocks.
 - OpenAI-compatible provider settings with searchable model pickers.
-- Model loading from `{baseUrl}/v1/models`.
-- Streaming chat through `{baseUrl}/v1/chat/completions`.
-- Agent mode can run safe commands in the active terminal and asks for in-app confirmation before risky commands.
-- Command-risk checks use a separately selected safety model.
-- Assistant responses render runnable fenced shell commands and markdown tables.
-- API keys stored through the OS keychain via `keytar`; non-secret settings are stored in the Electron user data folder.
+- API keys stored in the OS keychain through `keytar`.
 
-## Important LLM Note
+## Assistant Modes
 
-ChatGPT Plus is not an official API entitlement. Use an OpenAI-compatible API key from OpenAI Platform, OpenRouter, LM Studio, or another compatible gateway.
+AI Terminal separates passive help from active automation:
+
+- **Read mode** lets the assistant inspect terminal context and answer without touching the shell.
+- **Agent mode** asks the model for exactly one shell command at a time, checks command risk, then runs safe commands in the active terminal.
+- **Risky commands** require an in-app confirmation modal before execution.
+
+Command output is sent back to the assistant as context and appears in the chat as a subtle system-style item, so the thread stays readable.
+
+## Providers
+
+AI Terminal uses OpenAI-compatible endpoints:
+
+- model listing from `{baseUrl}/v1/models`
+- streaming chat from `{baseUrl}/v1/chat/completions`
+- a separate selected model for command-risk checks
+
+ChatGPT Plus is not an API entitlement. Use an API key from OpenAI Platform, OpenRouter, LM Studio, or another compatible gateway.
 
 ## Development
 
@@ -42,11 +78,11 @@ make build
 
 The package is written to `dist/` as a `.pkg` installer and a `.zip` containing the macOS app. Local builds are unsigned unless a Developer ID signing identity is configured on the machine.
 
-## Manual Acceptance
+## Manual QA
 
 1. Start the app with `npm run dev`.
 2. Confirm a local shell opens and accepts input.
-3. Select terminal output and send a prompt in the LLM panel.
+3. Select terminal output and ask the assistant about it.
 4. Configure an OpenAI-compatible `baseUrl`, save the API key, load models, and select chat and safety models.
 5. Ask for a harmless command such as listing the current directory.
 6. Verify agent mode runs a safe command in the active terminal.
