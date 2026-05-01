@@ -77,5 +77,8 @@
     "pkg": {
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     }
+  },
+  "engines": {
+    "node": ">=22 <23"
   }
 }

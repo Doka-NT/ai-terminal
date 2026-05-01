@@ -14,12 +14,18 @@ const execFileAsync = promisify(execFile)
 // OSC marker emitted by shell hook on every prompt
 const PROMPT_OSC = '\x1b]6973;PROMPT\x07'
 
+// Literal text of the printf command appended by runConfirmed for SSH sessions.
+// We filter this text from terminal output so the user never sees it.
+const PROMPT_ECHO_SNIPPET = "; printf '\\x1b]6973;PROMPT\\x07'"
+
 interface ManagedSession {
   pty: pty.IPty
   info: TerminalSessionInfo
   cwdTimer?: NodeJS.Timeout
   zdotdir?: string  // temp dir to clean up on kill
   promptMarkerRemainder?: string
+  /** Buffered data while looking for PROMPT_ECHO_SNIPPET in the output stream. */
+  echoFilterBuffer?: string
 }
 
 export class TerminalManager {
@@ -91,7 +97,16 @@ export class TerminalManager {
       return
     }
 
-    this.write(sessionId, `${normalized}\r`)
+    const session = this.requireSession(sessionId)
+    // For SSH sessions the shell hook is not installed, so we append a printf that
+    // emits the PROMPT_OSC marker after the command finishes.  The literal echo of
+    // the printf is stripped from terminal output so the user never sees it.
+    if (session.info.kind === 'ssh') {
+      session.echoFilterBuffer = ''
+      this.write(sessionId, `${normalized}${PROMPT_ECHO_SNIPPET}\r`)
+    } else {
+      this.write(sessionId, `${normalized}\r`)
+    }
   }
 
   list(): TerminalSessionInfo[] {
@@ -134,12 +149,43 @@ export class TerminalManager {
     this.sessions.set(id, managed)
 
     child.onData((data) => {
-      const parsed = stripPromptMarkers(managed, data)
-      if (parsed.sawPrompt) {
-        this.emit('terminal:prompt', { sessionId: id })
+      // Filter the echo of the appended printf from SSH agent commands
+      let filtered = data
+      if (managed.echoFilterBuffer !== undefined) {
+        const combined = managed.echoFilterBuffer + data
+        const idx = combined.indexOf(PROMPT_ECHO_SNIPPET)
+        if (idx !== -1) {
+          // Found the echo snippet — remove it and stop filtering
+          filtered = combined.slice(0, idx) + combined.slice(idx + PROMPT_ECHO_SNIPPET.length)
+          managed.echoFilterBuffer = undefined
+        } else {
+          // Not found yet — keep buffering (up to a reasonable limit)
+          if (combined.length > 4096) {
+            // Give up filtering — the snippet should have appeared by now
+            filtered = combined
+            managed.echoFilterBuffer = undefined
+          } else {
+            managed.echoFilterBuffer = combined
+            filtered = ''
+          }
+        }
       }
-      if (parsed.data) {
-        this.emit('terminal:data', { sessionId: id, data: parsed.data })
+
+      if (filtered) {
+        const parsed = stripPromptMarkers(managed, filtered)
+        if (parsed.sawPrompt) {
+          this.emit('terminal:prompt', { sessionId: id })
+        }
+        if (parsed.data) {
+          this.emit('terminal:data', { sessionId: id, data: parsed.data })
+        }
+      } else {
+        // Even when echo-filter swallows all data, still check for prompt markers
+        // in the buffer so we don't miss the PROMPT_OSC.
+        const parsed = stripPromptMarkers(managed, data)
+        if (parsed.sawPrompt) {
+          this.emit('terminal:prompt', { sessionId: id })
+        }
       }
     })
 

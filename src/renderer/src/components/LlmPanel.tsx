@@ -377,7 +377,7 @@ export function LlmPanel({
     const allowed = await confirmAgenticCommand(command)
     if (!allowed || !agenticRunningRef.current) return
 
-    // Wait for shell prompt (or timeout after 20s)
+    // Wait for shell prompt (or timeout after 10s)
     let finishPromptWait = (): void => {}
     const promptPromise = new Promise<void>((resolve) => {
       const finish = (): void => {
@@ -385,7 +385,7 @@ export function LlmPanel({
         promptResolveRef.current = null
         resolve()
       }
-      const timer = setTimeout(finish, 20_000)
+      const timer = setTimeout(finish, 10_000)
       finishPromptWait = finish
       promptResolveRef.current = finish
     })
