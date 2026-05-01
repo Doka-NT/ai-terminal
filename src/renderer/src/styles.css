@@ -1185,6 +1185,19 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.msg-action-pill--code {
+  border-color: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.msg-code-lang {
+  flex: 0 0 auto;
+  font-family: "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.22);
+  text-transform: lowercase;
+}
+
 .msg-run-button {
   flex: 0 0 auto;
   width: 22px;

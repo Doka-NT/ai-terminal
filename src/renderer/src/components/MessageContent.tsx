@@ -10,13 +10,14 @@ interface MessageContentProps {
 
 type Segment =
   | { type: 'text'; text: string }
-  | { type: 'code'; code: string }
+  | { type: 'code'; code: string; lang: string }
 
 type TextBlock =
   | { type: 'paragraph'; text: string }
   | { type: 'table'; header: string[]; rows: string[][] }
 
-const FENCE_RE = /```(?:bash|sh|shell|zsh|cmd)?\n([\s\S]*?)```/g
+const FENCE_RE = /```([a-z]*)\n([\s\S]*?)```/g
+const SHELL_LANGS = new Set(['bash', 'sh', 'shell', 'zsh', 'cmd', 'fish', 'ksh'])
 
 function parseContent(content: string): Segment[] {
   const segments: Segment[] = []
@@ -26,7 +27,7 @@ function parseContent(content: string): Segment[] {
     if (match.index > lastIndex) {
       segments.push({ type: 'text', text: content.slice(lastIndex, match.index) })
     }
-    segments.push({ type: 'code', code: match[1].trim() })
+    segments.push({ type: 'code', lang: match[1], code: match[2].trim() })
     lastIndex = match.index + match[0].length
   }
 
@@ -126,11 +127,14 @@ export function MessageContent({ content, onRun, onPrompt, disabled }: MessageCo
     <div className="message-content">
       {segments.map((seg, i) => {
         if (seg.type === 'code') {
+          const isShell = SHELL_LANGS.has(seg.lang) || seg.lang === ''
           return (
-            <div className="msg-action-pill" key={i}>
-              <TerminalSquare size={12} aria-hidden />
+            <div className={`msg-action-pill${isShell ? '' : ' msg-action-pill--code'}`} key={i}>
+              {isShell ? <TerminalSquare size={12} aria-hidden /> : (
+                <span className="msg-code-lang">{seg.lang || 'code'}</span>
+              )}
               <code>{seg.code}</code>
-              {onRun ? (
+              {isShell && onRun ? (
                 <button
                   className="msg-run-button"
                   type="button"

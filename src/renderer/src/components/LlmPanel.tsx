@@ -20,7 +20,7 @@ const ANSI_RE = new RegExp(
 const stripAnsi = (s: string): string => s.replace(ANSI_RE, '')
 
 function extractFirstCommand(content: string): string | undefined {
-  const m = /```(?:bash|sh|shell|zsh|cmd)?\n([\s\S]*?)```/.exec(content)
+  const m = /```(?:bash|sh|shell|zsh|cmd|fish|ksh)\n([\s\S]*?)```/.exec(content)
   return m?.[1]?.trim() || undefined
 }
 
