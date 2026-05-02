@@ -54,6 +54,22 @@ AI Terminal is a macOS-first Electron desktop terminal with:
 - Dangerous command confirmation must be an in-app modal, not `window.confirm` or a browser/system alert.
 - Use existing visual language: dark surfaces, restrained borders, lucide icons, compact controls.
 
+## Data Persistence & Import/Export
+
+Persistent data types and their storage:
+- **Providers**: `config.json` via ConfigStore (`src/main/services/configStore.ts`)
+- **API Keys**: OS keychain via SecretStore (`src/main/services/secretStore.ts`)
+- **Prompts**: `prompts/*.md` via PromptStore (`src/main/services/promptStore.ts`)
+- **Preferences** (textSize, sidebarWidth): localStorage in renderer
+
+### Adding new persistent data to import/export
+
+1. Add field to `ExportData` in `src/shared/types.ts`
+2. Collect in `data:export` handler (`src/main/index.ts`) — pass from renderer if stored in localStorage
+3. Restore in `data:import` handler (`src/main/index.ts`) — implement merge logic (skip existing by ID/key)
+4. Return new counts/values in `ImportResult` (`src/shared/types.ts`)
+5. Apply in `handleImport()` in `LlmPanel.tsx`
+
 ## Commands
 
 ```bash

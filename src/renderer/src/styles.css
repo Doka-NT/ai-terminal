@@ -378,6 +378,7 @@ button {
 .panel-title {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   min-width: 0;
   gap: 9px;
 }
@@ -393,6 +394,10 @@ button {
   background: var(--accent-brand);
 }
 
+.panel-title-text {
+  min-width: 0;
+}
+
 .panel-title h1 {
   margin: 0;
   overflow: hidden;
@@ -405,7 +410,6 @@ button {
 }
 
 .panel-title p {
-  max-width: 150px;
   margin: 1px 0 0;
   overflow: hidden;
   color: var(--text-muted);

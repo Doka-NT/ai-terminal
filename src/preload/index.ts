@@ -8,6 +8,7 @@ import type {
   CommandRiskAssessmentRequest,
   CommandProposal,
   CreateTerminalRequest,
+  ImportResult,
   LLMModel,
   PromptTemplate,
   SaveLLMProviderRequest,
@@ -98,6 +99,12 @@ const api = {
       ipcRenderer.invoke('prompt:save', prompt) as Promise<PromptTemplate>,
     delete: (id: string) => ipcRenderer.invoke('prompt:delete', id) as Promise<void>,
     importFiles: () => ipcRenderer.invoke('prompt:import') as Promise<PromptTemplate[]>
+  },
+  data: {
+    export: (preferences: { textSize?: number; sidebarWidth?: number }) =>
+      ipcRenderer.invoke('data:export', preferences) as Promise<void>,
+    import: () =>
+      ipcRenderer.invoke('data:import') as Promise<ImportResult | undefined>
   }
 }
 

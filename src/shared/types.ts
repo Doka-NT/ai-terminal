@@ -100,3 +100,21 @@ export interface AppConfig {
   providers: LLMProviderConfig[]
   activeProviderRef?: string
 }
+
+export interface ExportData {
+  version: number
+  exportedAt: string
+  config: AppConfig
+  apiKeys?: Record<string, string>
+  prompts: PromptTemplate[]
+  preferences: {
+    textSize?: number
+    sidebarWidth?: number
+  }
+}
+
+export interface ImportResult {
+  providersAdded: number
+  promptsAdded: number
+  preferences?: { textSize?: number; sidebarWidth?: number }
+}

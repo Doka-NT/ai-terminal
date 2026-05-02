@@ -105,6 +105,12 @@ export function App(): JSX.Element {
     }
   }, [])
 
+  const updateSidebarWidth = useCallback((value: number) => {
+    if (!Number.isFinite(value)) return
+    const max = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - MIN_WORKSPACE_WIDTH))
+    setSidebarWidth(clamp(value, MIN_SIDEBAR_WIDTH, max))
+  }, [])
+
   const shellStyle = {
     '--sidebar-width': `${sidebarWidth}px`,
     '--app-text-size': `${textSize}px`
@@ -263,6 +269,8 @@ export function App(): JSX.Element {
         onCloseSettings={() => setSettingsOpen(false)}
         textSize={textSize}
         onTextSizeChange={updateTextSize}
+        sidebarWidth={sidebarWidth}
+        onSidebarWidthChange={updateSidebarWidth}
       />
     </main>
   )

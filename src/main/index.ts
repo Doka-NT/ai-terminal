@@ -1,10 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   AppShortcutAction,
   ChatStreamRequest,
   CommandRiskAssessmentRequest,
   CreateTerminalRequest,
+  ExportData,
+  ImportResult,
   PromptTemplate,
   SaveLLMProviderRequest,
   SSHProfile
@@ -12,7 +15,7 @@ import type {
 import { TerminalManager } from './services/TerminalManager'
 import { ConfigStore } from './services/configStore'
 import { PromptStore } from './services/promptStore'
-import { deleteApiKey, saveApiKey } from './services/secretStore'
+import { deleteApiKey, getApiKey, saveApiKey } from './services/secretStore'
 import { assessCommandRisk, listModels, streamChatCompletion } from './services/llmService'
 import { extractCommandProposals } from './utils/commandProposals'
 
@@ -179,6 +182,99 @@ function registerIpc(): void {
       imported.push(prompt)
     }
     return imported
+  })
+
+  ipcMain.handle('data:export', async (_event, preferences: ExportData['preferences']) => {
+    const config = await configStore.load()
+    const prompts = await promptStore.list()
+    const includeKeysResult = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['Continue', 'Cancel'],
+      cancelId: 1,
+      defaultId: 0,
+      message: 'Export AI Terminal data',
+      detail: 'Choose whether this export should include plaintext API keys.',
+      checkboxLabel: 'Include API keys in export file',
+      checkboxChecked: false
+    })
+
+    if (includeKeysResult.response === 1) return
+
+    const apiKeys: Record<string, string> = {}
+    if (includeKeysResult.checkboxChecked) {
+      for (const provider of config.providers) {
+        const apiKey = await getApiKey(provider.apiKeyRef)
+        if (apiKey) apiKeys[provider.apiKeyRef] = apiKey
+      }
+    }
+
+    const exportData: ExportData = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      config,
+      ...(Object.keys(apiKeys).length > 0 ? { apiKeys } : {}),
+      prompts,
+      preferences
+    }
+
+    const saveResult = await dialog.showSaveDialog({
+      title: 'Export AI Terminal Data',
+      defaultPath: 'ai-terminal-backup.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+
+    if (saveResult.canceled || !saveResult.filePath) return
+    await writeFile(saveResult.filePath, JSON.stringify(exportData, null, 2), 'utf8')
+  })
+
+  ipcMain.handle('data:import', async (): Promise<ImportResult | undefined> => {
+    const openResult = await dialog.showOpenDialog({
+      title: 'Import AI Terminal Data',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+      properties: ['openFile']
+    })
+
+    if (openResult.canceled || openResult.filePaths.length === 0) return undefined
+
+    const raw = await readFile(openResult.filePaths[0], 'utf8')
+    const data = JSON.parse(raw) as Partial<ExportData>
+    if (data.version !== 1) {
+      throw new Error('Unsupported import file version')
+    }
+
+    const currentConfig = await configStore.load()
+    const currentProviderRefs = new Set(currentConfig.providers.map((provider) => provider.apiKeyRef))
+    const importedProviders = data.config?.providers ?? []
+    const newProviders = importedProviders.filter((provider) => !currentProviderRefs.has(provider.apiKeyRef))
+    const mergedConfig = {
+      ...currentConfig,
+      providers: [...currentConfig.providers, ...newProviders]
+    }
+
+    const currentPrompts = await promptStore.list()
+    const currentPromptIds = new Set(currentPrompts.map((prompt) => prompt.id))
+    const importedPrompts = Array.isArray(data.prompts) ? data.prompts : []
+    const newPrompts = importedPrompts.filter((prompt) => !currentPromptIds.has(prompt.id))
+
+    const newProviderRefs = new Set(newProviders.map((provider) => provider.apiKeyRef))
+    if (data.apiKeys) {
+      for (const [ref, apiKey] of Object.entries(data.apiKeys)) {
+        if (newProviderRefs.has(ref)) {
+          await saveApiKey(ref, apiKey)
+        }
+      }
+    }
+
+    await configStore.save(mergedConfig)
+    for (const prompt of newPrompts) {
+      await promptStore.save(prompt)
+    }
+
+    return {
+      providersAdded: newProviders.length,
+      promptsAdded: newPrompts.length,
+      preferences: data.preferences
+    }
   })
 
   ipcMain.on('llm:chatStream', (event, request: ChatStreamRequest) => {

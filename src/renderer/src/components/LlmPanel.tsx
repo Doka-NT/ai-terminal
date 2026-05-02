@@ -7,7 +7,7 @@ import {
   Plus, RefreshCw, Send, Settings2, Square, Trash2, User, X, Zap
 } from 'lucide-react'
 import type {
-  AppConfig, AssistMode, ChatMessage, ChatStreamEvent, LLMModel, LLMProviderConfig, PromptTemplate, TerminalContext, TerminalSessionInfo
+  AssistMode, ChatMessage, ChatStreamEvent, LLMModel, LLMProviderConfig, PromptTemplate, TerminalContext, TerminalSessionInfo
 } from '@shared/types'
 import { MessageContent } from './MessageContent'
 import { PromptPicker } from './PromptPicker'
@@ -79,6 +79,8 @@ interface LlmPanelProps {
   onCloseSettings: () => void
   textSize: number
   onTextSizeChange: (textSize: number) => void
+  sidebarWidth: number
+  onSidebarWidthChange: (sidebarWidth: number) => void
 }
 
 export function LlmPanel({
@@ -89,7 +91,9 @@ export function LlmPanel({
   onOpenSettings,
   onCloseSettings,
   textSize,
-  onTextSizeChange
+  onTextSizeChange,
+  sidebarWidth,
+  onSidebarWidthChange
 }: LlmPanelProps): JSX.Element {
   const [provider, setProvider] = useState<LLMProviderConfig>(defaultProvider)
   const [allProviders, setAllProviders] = useState<LLMProviderConfig[]>([defaultProvider])
@@ -106,10 +110,11 @@ export function LlmPanel({
   const [agenticCommand, setAgenticCommand] = useState('')
   const [textSizeDraft, setTextSizeDraft] = useState(String(textSize))
   const [commandConfirmation, setCommandConfirmation] = useState<CommandConfirmation | null>(null)
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'providers' | 'prompts'>('providers')
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'providers' | 'prompts' | 'data'>('providers')
   const [editingApiKey, setEditingApiKey] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(false)
   const [providerStatus, setProviderStatus] = useState('')
+  const [dataStatus, setDataStatus] = useState('')
 
   // Refs for use inside stable closures
   const activeRequestIdRef = useRef<string>()
@@ -140,21 +145,24 @@ export function LlmPanel({
   useEffect(() => { agenticStepRef.current = agenticStep }, [agenticStep])
   useEffect(() => { setTextSizeDraft(String(textSize)) }, [textSize])
 
+  const loadConfig = useCallback(async () => {
+    const config = await window.api.config.load()
+    const providers = config.providers.length > 0 ? config.providers : [defaultProvider]
+    const loadedActiveProviderRef = config.activeProviderRef ?? providers[0]?.apiKeyRef ?? defaultProvider.apiKeyRef
+    const loaded =
+      providers.find((p) => p.apiKeyRef === loadedActiveProviderRef) ??
+      providers[0] ??
+      defaultProvider
+    setProvider(loaded)
+    setAllProviders(providers)
+    setActiveProviderRef(loadedActiveProviderRef)
+    setHasApiKey(Boolean(loaded.apiKeyRef && loadedActiveProviderRef))
+  }, [])
+
   // Load config on mount
   useEffect(() => {
-    void window.api.config.load().then((config: AppConfig) => {
-      const providers = config.providers.length > 0 ? config.providers : [defaultProvider]
-      const loadedActiveProviderRef = config.activeProviderRef ?? providers[0]?.apiKeyRef ?? defaultProvider.apiKeyRef
-      const loaded =
-        providers.find((p) => p.apiKeyRef === loadedActiveProviderRef) ??
-        providers[0] ??
-        defaultProvider
-      setProvider(loaded)
-      setAllProviders(providers)
-      setActiveProviderRef(loadedActiveProviderRef)
-      setHasApiKey(Boolean(loaded.apiKeyRef && loadedActiveProviderRef))
-    })
-  }, [])
+    void loadConfig()
+  }, [loadConfig])
 
   // Prompt listener for agentic mode
   useEffect(() => {
@@ -581,6 +589,41 @@ export function LlmPanel({
     }
   }, [onTextSizeChange])
 
+  const handleExport = useCallback(async () => {
+    setDataStatus('Exporting...')
+    try {
+      await window.api.data.export({ textSize, sidebarWidth })
+      setDataStatus('Export complete')
+      setTimeout(() => setDataStatus(''), 3000)
+    } catch (error) {
+      setDataStatus(`Export failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [sidebarWidth, textSize])
+
+  const handleImport = useCallback(async () => {
+    setDataStatus('Importing...')
+    try {
+      const result = await window.api.data.import()
+      if (!result) {
+        setDataStatus('')
+        return
+      }
+
+      if (result.preferences?.textSize) onTextSizeChange(result.preferences.textSize)
+      if (result.preferences?.sidebarWidth) onSidebarWidthChange(result.preferences.sidebarWidth)
+
+      await loadConfig()
+
+      const parts: string[] = []
+      if (result.providersAdded) parts.push(`${result.providersAdded} provider(s)`)
+      if (result.promptsAdded) parts.push(`${result.promptsAdded} prompt(s)`)
+      setDataStatus(parts.length ? `Added: ${parts.join(', ')}` : 'Nothing new to import')
+      setTimeout(() => setDataStatus(''), 4000)
+    } catch (error) {
+      setDataStatus(`Import failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [loadConfig, onSidebarWidthChange, onTextSizeChange])
+
   const setPromptDraft = useCallback((prompt: string) => {
     setDraft(prompt)
     requestAnimationFrame(() => textareaRef.current?.focus())
@@ -615,9 +658,9 @@ export function LlmPanel({
             <span className="panel-icon">
               <Bot size={15} aria-hidden />
             </span>
-            <div>
-              <h1>{modelLabel.name}</h1>
-              <p>{modelLabel.version || provider.name}</p>
+            <div className="panel-title-text">
+              <h1 title={modelLabel.name}>{modelLabel.name}</h1>
+              <p title={modelLabel.version || provider.name}>{modelLabel.version || provider.name}</p>
             </div>
           </div>
           <div className="panel-header-right">
@@ -702,6 +745,13 @@ export function LlmPanel({
                   onClick={() => setSettingsTab('prompts')}
                 >
                   Prompts
+                </button>
+                <button
+                  type="button"
+                  className={`settings-nav-item ${settingsTab === 'data' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('data')}
+                >
+                  Data
                 </button>
               </nav>
 
@@ -862,6 +912,29 @@ export function LlmPanel({
                   <>
                     <h3 className="settings-content-title">Prompts</h3>
                     <PromptLibrarySection />
+                  </>
+                ) : null}
+
+                {settingsTab === 'data' ? (
+                  <>
+                    <h3 className="settings-content-title">Data</h3>
+                    <div className="appearance-row">
+                      <div className="appearance-row-left">
+                        <span className="appearance-row-label">Export / Import</span>
+                        <small className="appearance-row-desc">
+                          Providers, prompts and preferences
+                        </small>
+                      </div>
+                      <div className="appearance-row-right" style={{ gap: 8, display: 'flex' }}>
+                        <button type="button" className="quiet-button" onClick={() => void handleExport()}>
+                          Export
+                        </button>
+                        <button type="button" className="quiet-button" onClick={() => void handleImport()}>
+                          Import
+                        </button>
+                      </div>
+                    </div>
+                    {dataStatus ? <p className="settings-status">{dataStatus}</p> : null}
                   </>
                 ) : null}
               </div>
