@@ -12,6 +12,11 @@ import { getApiKey } from './secretStore'
 
 const COMMAND_RISK_TIMEOUT_MS = 15_000
 
+const LANGUAGE_NAMES: Record<string, string> = {
+  ru: 'Russian',
+  cn: 'Chinese'
+}
+
 export async function listModels(provider: LLMProviderConfig): Promise<LLMModel[]> {
   const response = await fetch(buildOpenAICompatibleUrl(provider.baseUrl, 'models'), {
     headers: await buildHeaders(provider)
@@ -162,13 +167,18 @@ function buildCommandRiskMessages(request: CommandRiskAssessmentRequest): ChatMe
     context.terminalOutput ? `Recent terminal output:\n${stripAnsi(context.terminalOutput).slice(-3000)}` : undefined
   ].filter(Boolean).join('\n')
 
+  const languageName = context.language ? LANGUAGE_NAMES[context.language] : undefined
+  const reasonFormat = languageName
+    ? `{"dangerous": boolean, "reason": string (MUST be written in ${languageName})}`
+    : `{"dangerous": boolean, "reason": string}`
+
   return [
     {
       role: 'system',
       content: [
         'You are a shell command safety classifier.',
         'Analyze only the command and terminal context in this request.',
-        'Return JSON only, with this exact shape: {"dangerous": boolean, "reason": string}.',
+        `Return JSON only, with this exact shape: ${reasonFormat}.`,
         'Mark dangerous true for commands that can delete, overwrite, move, chmod/chown, install/uninstall, change config, expose secrets, modify remote systems, escalate privileges, kill processes, shutdown/reboot, perform destructive git/package operations, or otherwise cause persistent side effects.',
         'Mark dangerous false for read-only inspection commands such as pwd, ls, cat, grep, find, git status, and help/version commands.'
       ].join('\n')
@@ -226,9 +236,15 @@ function stripAnsi(s: string): string {
 
 function buildMessages(messages: ChatMessage[], context: ChatStreamRequest['context']): ChatMessage[] {
   const mode = context.assistMode ?? 'off'
+  const languageName = context.language ? LANGUAGE_NAMES[context.language] : undefined
+  const languageInstruction = languageName
+    ? `Always respond in ${languageName}.`
+    : undefined
+
   const contextLines = [
     'You are an AI assistant embedded in a desktop terminal.',
     'Prefer concise, actionable terminal help.',
+    languageInstruction,
     ...buildModeInstructions(mode),
     context.session ? `Active session: ${context.session.label} (${context.session.kind}).` : undefined,
     context.session?.cwd ? `Current directory: ${context.session.cwd}.` : undefined,

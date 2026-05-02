@@ -101,7 +101,7 @@ const api = {
     importFiles: () => ipcRenderer.invoke('prompt:import') as Promise<PromptTemplate[]>
   },
   data: {
-    export: (preferences: { textSize?: number; sidebarWidth?: number }) =>
+    export: (preferences: { textSize?: number; sidebarWidth?: number; language?: string }) =>
       ipcRenderer.invoke('data:export', preferences) as Promise<void>,
     import: () =>
       ipcRenderer.invoke('data:import') as Promise<ImportResult | undefined>

@@ -128,7 +128,7 @@ export function buildSuggestionChips(context: SuggestionContext, limit = 3): Sug
 
   add('space', "What's taking space?", "What's taking the most disk space here?")
   add('processes', 'Check running processes', 'Check the most important running processes.')
-  add('last-command', 'Explain last command', 'Explain the last terminal command and its output.')
+  add('lastCommand', 'Explain last command', 'Explain the last terminal command and its output.')
 
   return suggestions.slice(0, limit)
 }

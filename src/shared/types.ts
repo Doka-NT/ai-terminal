@@ -57,6 +57,7 @@ export interface TerminalContext {
   selectedText: string
   assistMode?: AssistMode
   terminalOutput?: string
+  language?: string
   session?: Pick<TerminalSessionInfo, 'id' | 'kind' | 'label' | 'cwd' | 'shell'>
 }
 
@@ -110,11 +111,12 @@ export interface ExportData {
   preferences: {
     textSize?: number
     sidebarWidth?: number
+    language?: string
   }
 }
 
 export interface ImportResult {
   providersAdded: number
   promptsAdded: number
-  preferences?: { textSize?: number; sidebarWidth?: number }
+  preferences?: { textSize?: number; sidebarWidth?: number; language?: string }
 }

@@ -3,6 +3,8 @@ import { Plus, Settings2, X } from 'lucide-react'
 import type { TerminalSessionInfo } from '@shared/types'
 import { TerminalPane } from './components/TerminalPane'
 import { LlmPanel } from './components/LlmPanel'
+import { LanguageProvider } from './i18n/LanguageContext'
+import type { Language } from './i18n/translations'
 
 interface SessionState extends TerminalSessionInfo {
   status: 'running' | 'exited'
@@ -16,6 +18,7 @@ const MIN_WORKSPACE_WIDTH = 520
 const DEFAULT_TEXT_SIZE = 13.5
 const SIDEBAR_WIDTH_KEY = 'ai-terminal.sidebarWidth'
 const TEXT_SIZE_KEY = 'ai-terminal.textSize'
+const LANGUAGE_KEY = 'ai-terminal.language'
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -42,6 +45,9 @@ export function App(): JSX.Element {
   )
   const [textSize, setTextSize] = useState(() =>
     storedPositiveNumber(TEXT_SIZE_KEY, DEFAULT_TEXT_SIZE)
+  )
+  const [language, setLanguage] = useState<Language>(() =>
+    (window.localStorage.getItem(LANGUAGE_KEY) as Language) ?? 'en'
   )
   const outputBuffers = useRef(new Map<string, string>())
 
@@ -70,6 +76,10 @@ export function App(): JSX.Element {
   useEffect(() => {
     window.localStorage.setItem(TEXT_SIZE_KEY, String(textSize))
   }, [textSize])
+
+  useEffect(() => {
+    window.localStorage.setItem(LANGUAGE_KEY, language)
+  }, [language])
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -187,6 +197,7 @@ export function App(): JSX.Element {
   }, [clearActiveTerminal, closeActiveSession, createLocalSession])
 
   return (
+    <LanguageProvider language={language}>
     <main className="app-shell" style={shellStyle}>
       <section className="workspace">
         <header className="topbar">
@@ -271,7 +282,10 @@ export function App(): JSX.Element {
         onTextSizeChange={updateTextSize}
         sidebarWidth={sidebarWidth}
         onSidebarWidthChange={updateSidebarWidth}
+        language={language}
+        onLanguageChange={setLanguage}
       />
     </main>
+    </LanguageProvider>
   )
 }

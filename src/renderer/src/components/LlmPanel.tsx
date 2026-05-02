@@ -12,6 +12,9 @@ import type {
 import { MessageContent } from './MessageContent'
 import { PromptPicker } from './PromptPicker'
 import { buildSuggestionChips, formatModelLabel, statusToInlineStatus } from '@renderer/utils/redesign'
+import type { InlineStatus } from '@renderer/utils/redesign'
+import { useT } from '@renderer/i18n/LanguageContext'
+import type { Language } from '@renderer/i18n/translations'
 
 // ...existing code...
 
@@ -81,6 +84,8 @@ interface LlmPanelProps {
   onTextSizeChange: (textSize: number) => void
   sidebarWidth: number
   onSidebarWidthChange: (sidebarWidth: number) => void
+  language: Language
+  onLanguageChange: (language: Language) => void
 }
 
 export function LlmPanel({
@@ -93,8 +98,11 @@ export function LlmPanel({
   textSize,
   onTextSizeChange,
   sidebarWidth,
-  onSidebarWidthChange
+  onSidebarWidthChange,
+  language,
+  onLanguageChange
 }: LlmPanelProps): JSX.Element {
+  const { t } = useT()
   const [provider, setProvider] = useState<LLMProviderConfig>(defaultProvider)
   const [allProviders, setAllProviders] = useState<LLMProviderConfig[]>([defaultProvider])
   const [activeProviderRef, setActiveProviderRef] = useState(defaultProvider.apiKeyRef)
@@ -102,7 +110,7 @@ export function LlmPanel({
   const [models, setModels] = useState<LLMModel[]>([])
   const [messages, setMessages] = useState<ThreadMessage[]>([])
   const [draft, setDraft] = useState('')
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState<InlineStatus | null>(null)
   const [streaming, setStreaming] = useState(false)
   const [assistMode, setAssistMode] = useState<AssistMode>(DEFAULT_ASSIST_MODE)
   const [agenticRunning, setAgenticRunning] = useState(false)
@@ -133,8 +141,10 @@ export function LlmPanel({
   const commandConfirmationResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
   const agenticStepRef = useRef(0)
   const [agenticTick, setAgenticTick] = useState(0)
+  const languageRef = useRef<Language>(language)
 
   // Keep refs in sync
+  useEffect(() => { languageRef.current = language }, [language])
   useEffect(() => { agenticRunningRef.current = agenticRunning }, [agenticRunning])
   useEffect(() => { assistModeRef.current = assistMode }, [assistMode])
   useEffect(() => { activeSessionRef.current = activeSession }, [activeSession])
@@ -233,6 +243,7 @@ export function LlmPanel({
         selectedText: selectedTextRef.current,
         assistMode: mode,
         terminalOutput: terminalOutput || undefined,
+        language: languageRef.current,
         session: session
           ? { id: session.id, kind: session.kind, label: session.label, cwd: session.cwd, shell: session.shell }
           : undefined
@@ -258,7 +269,7 @@ export function LlmPanel({
       }
 
       if (event.type === 'error') {
-        setStatus(event.message)
+        setStatus({ tone: 'danger', label: event.message })
         setStreaming(false)
         agenticRunningRef.current = false
         promptResolveRef.current = null
@@ -271,7 +282,7 @@ export function LlmPanel({
 
       if (event.type === 'done') {
         setStreaming(false)
-        setStatus('')
+        setStatus(null)
         activeRequestIdRef.current = undefined
         if (agenticRunningRef.current) {
           agenticPendingRef.current = streamingContentRef.current
@@ -309,7 +320,7 @@ export function LlmPanel({
     setStreaming(false)
     setMessages([])
     messagesRef.current = []
-    setStatus('')
+    setStatus(null)
   }, [stopAgentic])
 
   const buildTerminalContext = useCallback((): TerminalContext => {
@@ -320,6 +331,7 @@ export function LlmPanel({
       selectedText: selectedTextRef.current,
       assistMode: 'agent',
       terminalOutput: terminalOutput || undefined,
+      language: languageRef.current,
       session: session
         ? { id: session.id, kind: session.kind, label: session.label, cwd: session.cwd, shell: session.shell }
         : undefined
@@ -327,7 +339,7 @@ export function LlmPanel({
   }, [])
 
   const confirmAgenticCommand = useCallback(async (command: string): Promise<boolean> => {
-    setStatus('Checking command safety...')
+    setStatus({ tone: 'info', label: t('status.checkingSafety') })
 
     try {
       const assessment = await window.api.llm.assessCommandRisk({
@@ -337,48 +349,48 @@ export function LlmPanel({
       })
 
       if (!assessment.dangerous) {
-        setStatus('')
+        setStatus(null)
         return true
       }
 
-      setStatus('')
+      setStatus(null)
       const confirmed = await requestCommandConfirmation({
-        title: 'Review risky command',
+        title: t('confirm.reviewRisky'),
         reason: assessment.reason,
         command,
         tone: 'danger',
-        confirmLabel: 'Run command'
+        confirmLabel: t('confirm.runCommand')
       })
 
       if (!confirmed) {
-        setStatus('Agent stopped before running a risky command.')
+        setStatus({ tone: 'warning', label: t('status.agentStopped.riskyCommand') })
         stopAgentic()
         return false
       }
 
-      setStatus('Risky command confirmed by user.')
+      setStatus({ tone: 'warning', label: t('status.riskyCommandConfirmed') })
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      setStatus('')
+      setStatus(null)
       const confirmed = await requestCommandConfirmation({
-        title: 'Safety check unavailable',
+        title: t('confirm.safetyUnavailable'),
         reason: message,
         command,
         tone: 'warning',
-        confirmLabel: 'Run anyway'
+        confirmLabel: t('confirm.runAnyway')
       })
 
       if (!confirmed) {
-        setStatus('Agent stopped because command safety could not be checked.')
+        setStatus({ tone: 'warning', label: t('status.agentStopped.safetyUnchecked') })
         stopAgentic()
         return false
       }
 
-      setStatus('Safety check failed; command confirmed by user.')
+      setStatus({ tone: 'warning', label: t('status.safetyFailedConfirmed') })
       return true
     }
-  }, [buildTerminalContext, requestCommandConfirmation, stopAgentic])
+  }, [buildTerminalContext, requestCommandConfirmation, stopAgentic, t])
 
   // Agentic step runner (ref-based to avoid stale closures)
   const runAgenticStepRef = useRef<(content: string) => Promise<void>>(async () => {})
@@ -399,7 +411,7 @@ export function LlmPanel({
 
     const nextStep = agenticStepRef.current + 1
     if (nextStep > 10) {
-      setStatus('Agent stopped after 10 steps.')
+      setStatus({ tone: 'info', label: t('status.agentStopped.tenSteps') })
       stopAgentic()
       return
     }
@@ -425,7 +437,7 @@ export function LlmPanel({
     })
 
     void window.api.command.runConfirmed(session.id, command).catch((error: unknown) => {
-      setStatus(`Command failed: ${error instanceof Error ? error.message : String(error)}`)
+      setStatus({ tone: 'danger', label: `Command failed: ${error instanceof Error ? error.message : String(error)}` })
       stopAgentic()
       finishPromptWait()
     })
@@ -443,7 +455,7 @@ export function LlmPanel({
       command,
       output
     })
-  }, [confirmAgenticCommand, stopAgentic, startStream])
+  }, [confirmAgenticCommand, stopAgentic, startStream, t])
 
   // Keep ref updated
   useEffect(() => { runAgenticStepRef.current = runAgenticStep }, [runAgenticStep])
@@ -464,7 +476,7 @@ export function LlmPanel({
 
     if (assistModeRef.current === 'agent') {
       if (!activeSessionRef.current) {
-        setStatus('Open a terminal session before starting the agent.')
+        setStatus({ tone: 'info', label: t('status.noSession.agent') })
         return
       }
 
@@ -475,18 +487,18 @@ export function LlmPanel({
       setAgenticRunning(true)
       setAgenticStep(0)
       setAgenticCommand('')
-      setStatus('')
+      setStatus(null)
     }
 
     setDraft('')
     startStream(content, messagesRef.current)
-  }, [commandConfirmation, draft, streaming, startStream])
+  }, [commandConfirmation, draft, streaming, startStream, t])
 
   // Run command inline from MessageContent
   const runCommand = useCallback(async (command: string) => {
     const session = activeSessionRef.current
     if (!session) {
-      setStatus('Open a terminal session before running a command.')
+      setStatus({ tone: 'info', label: t('status.noSession.run') })
       return
     }
 
@@ -494,7 +506,7 @@ export function LlmPanel({
     if (!allowed) return
 
     void window.api.command.runConfirmed(session.id, command)
-  }, [confirmAgenticCommand])
+  }, [confirmAgenticCommand, t])
 
   // Save provider
   const saveProvider = useCallback(async () => {
@@ -592,13 +604,13 @@ export function LlmPanel({
   const handleExport = useCallback(async () => {
     setDataStatus('Exporting...')
     try {
-      await window.api.data.export({ textSize, sidebarWidth })
+      await window.api.data.export({ textSize, sidebarWidth, language })
       setDataStatus('Export complete')
       setTimeout(() => setDataStatus(''), 3000)
     } catch (error) {
       setDataStatus(`Export failed: ${error instanceof Error ? error.message : String(error)}`)
     }
-  }, [sidebarWidth, textSize])
+  }, [sidebarWidth, textSize, language])
 
   const handleImport = useCallback(async () => {
     setDataStatus('Importing...')
@@ -611,6 +623,7 @@ export function LlmPanel({
 
       if (result.preferences?.textSize) onTextSizeChange(result.preferences.textSize)
       if (result.preferences?.sidebarWidth) onSidebarWidthChange(result.preferences.sidebarWidth)
+      if (result.preferences?.language) onLanguageChange(result.preferences.language as Language)
 
       await loadConfig()
 
@@ -622,7 +635,7 @@ export function LlmPanel({
     } catch (error) {
       setDataStatus(`Import failed: ${error instanceof Error ? error.message : String(error)}`)
     }
-  }, [loadConfig, onSidebarWidthChange, onTextSizeChange])
+  }, [loadConfig, onSidebarWidthChange, onTextSizeChange, onLanguageChange])
 
   const setPromptDraft = useCallback((prompt: string) => {
     setDraft(prompt)
@@ -646,8 +659,11 @@ export function LlmPanel({
     cwd: activeSession?.cwd,
     selectedText,
     assistMode
-  }), [activeSession?.cwd, assistMode, selectedText, strippedTerminalOutput])
-  const inlineStatus = status ? statusToInlineStatus(status) : undefined
+  }).map((chip) => ({
+    ...chip,
+    label: t(`chip.${chip.id}` as Parameters<typeof t>[0]),
+    prompt: t(`chip.${chip.id}Prompt` as Parameters<typeof t>[0])
+  })), [activeSession?.cwd, assistMode, selectedText, strippedTerminalOutput, t])
   const inputDisabled = Boolean(commandConfirmation)
 
   return (
@@ -665,13 +681,13 @@ export function LlmPanel({
           </div>
           <div className="panel-header-right">
             <div className="agent-toggle-group">
-              <span>Agent</span>
+              <span>{t('panel.agent')}</span>
               <button
                 className={`agent-toggle ${assistMode === 'agent' ? 'on' : ''}`}
                 type="button"
                 role="switch"
                 aria-checked={assistMode === 'agent'}
-                title={assistMode === 'agent' ? 'Switch to read-only context' : 'Enable agent execution'}
+                title={assistMode === 'agent' ? t('panel.agentToggle.disable') : t('panel.agentToggle.enable')}
                 onClick={toggleAgentMode}
               >
                 <span />
@@ -681,7 +697,7 @@ export function LlmPanel({
               className="icon-button panel-action-button"
               type="button"
               onClick={onOpenSettings}
-              title="Settings"
+              title={t('panel.settings')}
             >
               <Settings2 size={13} aria-hidden />
             </button>
@@ -690,7 +706,7 @@ export function LlmPanel({
               type="button"
               onClick={clearHistory}
               disabled={messages.length === 0 && !streaming}
-              title="Clear chat history"
+              title={t('panel.clearHistory')}
             >
               <Trash2 size={13} aria-hidden />
             </button>
@@ -702,10 +718,10 @@ export function LlmPanel({
             <span>{activeSession?.label ?? 'zsh'}</span>
           </span>
           <span className={`permission-chip ${assistMode !== 'off' ? 'read' : ''}`}>
-            <span>Read</span>
+            <span>{t('panel.permission.read')}</span>
           </span>
           <span className={`permission-chip ${assistMode === 'agent' ? 'execute' : ''} ${agenticRunning ? 'running' : ''} ${commandConfirmation ? 'pending' : ''}`}>
-            <span>{commandConfirmation ? 'Pending' : 'Execute'}</span>
+            <span>{commandConfirmation ? t('panel.permission.pending') : t('panel.permission.execute')}</span>
           </span>
         </div>
       </header>
@@ -716,7 +732,7 @@ export function LlmPanel({
             <header className="settings-header">
               <div className="settings-title">
                 <Settings2 size={17} aria-hidden />
-                <h2 id="settings-title">Settings</h2>
+                <h2 id="settings-title">{t('settings.title')}</h2>
               </div>
               <button className="icon-button" type="button" onClick={onCloseSettings} title="Close settings">
                 <X size={16} aria-hidden />
@@ -730,39 +746,39 @@ export function LlmPanel({
                   className={`settings-nav-item ${settingsTab === 'appearance' ? 'active' : ''}`}
                   onClick={() => setSettingsTab('appearance')}
                 >
-                  Appearance
+                  {t('settings.tab.appearance')}
                 </button>
                 <button
                   type="button"
                   className={`settings-nav-item ${settingsTab === 'providers' ? 'active' : ''}`}
                   onClick={() => setSettingsTab('providers')}
                 >
-                  Providers
+                  {t('settings.tab.providers')}
                 </button>
                 <button
                   type="button"
                   className={`settings-nav-item ${settingsTab === 'prompts' ? 'active' : ''}`}
                   onClick={() => setSettingsTab('prompts')}
                 >
-                  Prompts
+                  {t('settings.tab.prompts')}
                 </button>
                 <button
                   type="button"
                   className={`settings-nav-item ${settingsTab === 'data' ? 'active' : ''}`}
                   onClick={() => setSettingsTab('data')}
                 >
-                  Data
+                  {t('settings.tab.data')}
                 </button>
               </nav>
 
               <div className="settings-content">
                 {settingsTab === 'appearance' ? (
                   <>
-                    <h3 className="settings-content-title">Appearance</h3>
+                    <h3 className="settings-content-title">{t('appearance.title')}</h3>
                     <div className="appearance-row">
                       <div className="appearance-row-left">
-                        <span className="appearance-row-label">Terminal font size</span>
-                        <small className="appearance-row-desc">Applied to all terminal sessions</small>
+                        <span className="appearance-row-label">{t('appearance.fontSize.label')}</span>
+                        <small className="appearance-row-desc">{t('appearance.fontSize.desc')}</small>
                       </div>
                       <div className="appearance-row-right">
                         <input
@@ -773,7 +789,24 @@ export function LlmPanel({
                           value={textSizeDraft}
                           onChange={(event) => handleTextSizeChange(event.target.value)}
                         />
-                        <output className="text-size-applied">{textSize}px applied</output>
+                        <output className="text-size-applied">{t('appearance.fontSize.applied', { value: textSize })}</output>
+                      </div>
+                    </div>
+                    <div className="appearance-row">
+                      <div className="appearance-row-left">
+                        <span className="appearance-row-label">{t('appearance.language.label')}</span>
+                        <small className="appearance-row-desc">{t('appearance.language.desc')}</small>
+                      </div>
+                      <div className="appearance-row-right">
+                        <select
+                          className="language-select"
+                          value={language}
+                          onChange={(event) => onLanguageChange(event.target.value as Language)}
+                        >
+                          <option value="en">{t('appearance.language.en')}</option>
+                          <option value="ru">{t('appearance.language.ru')}</option>
+                          <option value="cn">{t('appearance.language.cn')}</option>
+                        </select>
                       </div>
                     </div>
                   </>
@@ -781,13 +814,13 @@ export function LlmPanel({
 
                 {settingsTab === 'providers' ? (
                   <>
-                    <h3 className="settings-content-title">Providers</h3>
+                    <h3 className="settings-content-title">{t('providers.title')}</h3>
                     <div className="providers-layout">
                       {/* Left column — provider list */}
                       <div>
                         <div className="providers-list-header">
-                          <span>Providers</span>
-                          <button type="button" className="quiet-button" style={{ height: 28, fontSize: 11, padding: '0 7px' }} title="Add provider" onClick={addProvider}>
+                          <span>{t('providers.title')}</span>
+                          <button type="button" className="quiet-button" style={{ height: 28, fontSize: 11, padding: '0 7px' }} title={t('providers.addProvider')} onClick={addProvider}>
                             <Plus size={12} aria-hidden />
                           </button>
                         </div>
@@ -805,13 +838,13 @@ export function LlmPanel({
                                 onKeyDown={(e) => { if (e.key === 'Enter') switchProvider(p) }}
                               >
                                 <span className={`provider-active-dot ${isActiveProvider ? 'visible' : ''}`} />
-                                <span className="provider-list-item-name">{p.name || 'Unnamed'}</span>
-                                {isActiveProvider ? <span className="provider-active-label">active</span> : null}
+                                <span className="provider-list-item-name">{p.name || t('providers.unnamed')}</span>
+                                {isActiveProvider ? <span className="provider-active-label">{t('providers.active')}</span> : null}
                                 {allProviders.length > 1 ? (
                                   <button
                                     type="button"
                                     className="provider-list-item-delete icon-button"
-                                    title="Delete provider"
+                                    title={t('providers.deleteProvider')}
                                     onClick={(e) => { e.stopPropagation(); void handleDeleteProvider(p.apiKeyRef) }}
                                   >
                                     <Trash2 size={12} aria-hidden />
@@ -826,31 +859,31 @@ export function LlmPanel({
                       {/* Right column — provider form */}
                       <div className="provider-form">
                         <div className="provider-field">
-                          <span className="provider-field-label">Provider name</span>
+                          <span className="provider-field-label">{t('providers.name')}</span>
                           <input
                             value={provider.name}
                             onChange={(event) => setProvider((p) => ({ ...p, name: event.target.value }))}
                           />
                         </div>
                         <div className="provider-field">
-                          <span className="provider-field-label">Base URL</span>
+                          <span className="provider-field-label">{t('providers.baseUrl')}</span>
                           <input
                             value={provider.baseUrl}
                             onChange={(event) => setProvider((p) => ({ ...p, baseUrl: event.target.value }))}
                           />
                         </div>
                         <div className="provider-field">
-                          <span className="provider-field-label">API key</span>
+                          <span className="provider-field-label">{t('providers.apiKey')}</span>
                           {!editingApiKey && hasApiKey ? (
                             <div className="apikey-masked">
                               <span className="apikey-masked-text">●●●●●●●●</span>
-                              <span className="apikey-masked-hint">saved in keychain</span>
+                              <span className="apikey-masked-hint">{t('providers.apiKey.saved')}</span>
                               <button
                                 type="button"
                                 className="apikey-change-btn"
                                 onClick={() => setEditingApiKey(true)}
                               >
-                                Change
+                                {t('providers.apiKey.change')}
                               </button>
                             </div>
                           ) : (
@@ -858,18 +891,18 @@ export function LlmPanel({
                               type="password"
                               value={apiKey}
                               onChange={(event) => setApiKey(event.target.value)}
-                              placeholder={hasApiKey ? 'Enter new key to replace…' : 'Enter API key…'}
+                              placeholder={hasApiKey ? t('providers.apiKey.replacePlaceholder') : t('providers.apiKey.placeholder')}
                             />
                           )}
                         </div>
                         <div className="provider-actions">
                           <button type="button" className="quiet-button" onClick={() => void saveProvider()}>
                             <KeyRound size={14} aria-hidden />
-                            Save provider
+                            {t('providers.save')}
                           </button>
                           <button type="button" className="quiet-button" onClick={() => void loadModels()}>
                             <RefreshCw size={13} aria-hidden />
-                            Fetch models
+                            {t('providers.fetchModels')}
                           </button>
                         </div>
                         {providerStatus ? (
@@ -879,11 +912,11 @@ export function LlmPanel({
                         ) : null}
                         <div className="provider-model-selectors">
                           <div className="model-field">
-                            <span>Chat model</span>
+                            <span>{t('providers.chatModel')}</span>
                             <ModelCombobox
                               value={provider.selectedModel ?? ''}
                               models={models}
-                              placeholder="Search chat model"
+                              placeholder={t('providers.searchChatModel')}
                               onChange={(modelId) => {
                                 const updated = { ...provider, selectedModel: modelId }
                                 updateProvider(updated)
@@ -891,11 +924,11 @@ export function LlmPanel({
                             />
                           </div>
                           <div className="model-field">
-                            <span>Command safety model</span>
+                            <span>{t('providers.safetyModel')}</span>
                             <ModelCombobox
                               value={provider.commandRiskModel ?? ''}
                               models={models}
-                              placeholder="Search safety model"
+                              placeholder={t('providers.searchSafetyModel')}
                               onChange={(modelId) => {
                                 const updated = { ...provider, commandRiskModel: modelId }
                                 updateProvider(updated)
@@ -910,27 +943,27 @@ export function LlmPanel({
 
                 {settingsTab === 'prompts' ? (
                   <>
-                    <h3 className="settings-content-title">Prompts</h3>
+                    <h3 className="settings-content-title">{t('prompts.title')}</h3>
                     <PromptLibrarySection />
                   </>
                 ) : null}
 
                 {settingsTab === 'data' ? (
                   <>
-                    <h3 className="settings-content-title">Data</h3>
+                    <h3 className="settings-content-title">{t('data.title')}</h3>
                     <div className="appearance-row">
                       <div className="appearance-row-left">
-                        <span className="appearance-row-label">Export / Import</span>
+                        <span className="appearance-row-label">{t('data.exportImport.label')}</span>
                         <small className="appearance-row-desc">
-                          Providers, prompts and preferences
+                          {t('data.exportImport.desc')}
                         </small>
                       </div>
                       <div className="appearance-row-right" style={{ gap: 8, display: 'flex' }}>
                         <button type="button" className="quiet-button" onClick={() => void handleExport()}>
-                          Export
+                          {t('data.export')}
                         </button>
                         <button type="button" className="quiet-button" onClick={() => void handleImport()}>
-                          Import
+                          {t('data.import')}
                         </button>
                       </div>
                     </div>
@@ -946,8 +979,8 @@ export function LlmPanel({
       <section className="chat-log" aria-live="polite" ref={chatLogRef}>
         {messages.length === 0 ? (
           <div className="empty-chat">
-            <strong>Ready to help</strong>
-            <p>Ask about your terminal, commands, or selected text</p>
+            <strong>{t('chat.empty.title')}</strong>
+            <p>{t('chat.empty.body')}</p>
             <div className="suggestion-chips">
               {suggestionChips.map((suggestion) => (
                 <button type="button" key={suggestion.id} onClick={() => setPromptDraft(suggestion.prompt)}>
@@ -957,7 +990,7 @@ export function LlmPanel({
             </div>
             {!provider.selectedModel ? (
               <button className="quiet-button" type="button" onClick={onOpenSettings}>
-                Connect provider
+                {t('chat.connectProvider')}
               </button>
             ) : null}
           </div>
@@ -972,12 +1005,12 @@ export function LlmPanel({
               <div className="command-output-message" key={`command-output-${index}`}>
                 <div>
                   <span className="system-prefix">&gt;</span>
-                  <span>output sent to assistant</span>
+                  <span>{t('chat.commandOutput.label')}</span>
                   {message.command ? <code>{message.command}</code> : null}
                 </div>
                 <details>
-                  <summary>Show output</summary>
-                  <pre>{message.output?.trim() || '(no output)'}</pre>
+                  <summary>{t('chat.commandOutput.show')}</summary>
+                  <pre>{message.output?.trim() || t('chat.commandOutput.noOutput')}</pre>
                 </details>
               </div>
             )
@@ -991,7 +1024,7 @@ export function LlmPanel({
                     ? <Bot size={10} aria-hidden />
                     : <User size={10} aria-hidden />}
                 </span>
-                <span className="chat-role-label">{message.role}</span>
+                <span className="chat-role-label">{message.role === 'assistant' ? t('chat.role.assistant') : t('chat.role.user')}</span>
               </div>
               {showDots ? (
                 <div className="streaming-dots">
@@ -1014,13 +1047,13 @@ export function LlmPanel({
         {agenticRunning && agenticStep > 0 ? (
           <div className="agentic-status">
             <Zap size={12} aria-hidden />
-            <span>Step {agenticStep} — {commandConfirmation ? 'waiting for review' : 'running'} <code>{agenticCommand}</code></span>
+            <span>{t('agent.step', { step: agenticStep, state: commandConfirmation ? t('agent.waiting') : t('agent.running') })} <code>{agenticCommand}</code></span>
           </div>
         ) : null}
 
-        {inlineStatus ? (
-          <div className={`inline-status ${inlineStatus.tone}`}>
-            <span>{inlineStatus.label}</span>
+        {status ? (
+          <div className={`inline-status ${status.tone}`}>
+            <span>{status.label}</span>
           </div>
         ) : null}
       </section>
@@ -1036,21 +1069,21 @@ export function LlmPanel({
               <AlertTriangle size={12} aria-hidden />
               <h2 id="command-confirmation-title">{commandConfirmation.title}</h2>
             </div>
-            <span>{commandConfirmation.tone === 'danger' ? 'review' : 'warning'}</span>
+            <span>{commandConfirmation.tone === 'danger' ? t('confirm.review') : t('confirm.warning')}</span>
           </div>
           <div className="command-confirmation-body">
             <div className="command-confirmation-command">
               <code>{commandConfirmation.command}</code>
             </div>
             <div className="command-confirmation-reason">
-              <span>Reason</span>
+              <span>{t('confirm.reason')}</span>
               <p>{commandConfirmation.reason}</p>
             </div>
-            <p className="command-confirmation-note">Agent is paused until you choose what to do.</p>
+            <p className="command-confirmation-note">{t('confirm.agentPaused')}</p>
           </div>
           <footer>
             <button type="button" className="quiet-button" onClick={() => resolveCommandConfirmation(false)}>
-              Cancel
+              {t('confirm.cancel')}
             </button>
             <button
               type="button"
@@ -1083,7 +1116,7 @@ export function LlmPanel({
               sendMessage()
             }
           }}
-          placeholder="Ask about this terminal…"
+          placeholder={t('chat.input.placeholder')}
           rows={1}
         />
         <div className="chat-form-actions">
@@ -1093,8 +1126,8 @@ export function LlmPanel({
               className="stop-button"
               type="button"
               onClick={stopAgentic}
-              title="Stop agent"
-              aria-label="Stop agent"
+              title={t('chat.stopAgent')}
+              aria-label={t('chat.stopAgent')}
             >
               <Square size={14} aria-hidden />
             </button>
@@ -1103,8 +1136,8 @@ export function LlmPanel({
             className={`send-button ${streaming ? 'streaming' : ''}`}
             type="submit"
             disabled={streaming || inputDisabled || !draft.trim()}
-            title="Send (Enter)"
-            aria-label="Send message"
+            title={t('chat.send')}
+            aria-label={t('chat.send')}
           >
             <Send size={15} aria-hidden />
           </button>
@@ -1122,6 +1155,7 @@ interface ModelComboboxProps {
 }
 
 function ModelCombobox({ value, models, placeholder, onChange }: ModelComboboxProps): JSX.Element {
+  const { t } = useT()
   const listboxId = useId()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
@@ -1220,7 +1254,7 @@ function ModelCombobox({ value, models, placeholder, onChange }: ModelComboboxPr
         aria-controls={listboxId}
         aria-activedescendant={activeOptionId}
         value={open ? query : formattedValue}
-        placeholder={models.length > 0 || value ? placeholder : 'Load models first'}
+        placeholder={models.length > 0 || value ? placeholder : t('model.loadModelsFirst')}
         onFocus={(event) => {
           setOpen(true)
           event.currentTarget.select()
@@ -1270,12 +1304,12 @@ function ModelCombobox({ value, models, placeholder, onChange }: ModelComboboxPr
             })
           ) : (
             <div className="model-combobox-empty">
-              {models.length > 0 ? 'No matching models' : 'Load models to search'}
+              {models.length > 0 ? t('model.noMatch') : t('model.loadFirst')}
             </div>
           )}
           {matchingModels.length > MAX_VISIBLE_MODELS ? (
             <div className="model-combobox-count">
-              Showing {MAX_VISIBLE_MODELS} of {matchingModels.length}
+              {t('model.showing', { visible: MAX_VISIBLE_MODELS, total: matchingModels.length })}
             </div>
           ) : null}
         </div>
@@ -1285,6 +1319,7 @@ function ModelCombobox({ value, models, placeholder, onChange }: ModelComboboxPr
 }
 
 function PromptLibrarySection(): JSX.Element {
+  const { t } = useT()
   const [prompts, setPrompts] = useState<PromptTemplate[]>([])
   const [editing, setEditing] = useState<PromptTemplate | null>(null)
   const [addingPrompt, setAddingPrompt] = useState(false)
@@ -1370,15 +1405,15 @@ function PromptLibrarySection(): JSX.Element {
   return (
     <section className="settings-section">
       <div className="settings-section-heading">
-        <span>Prompts</span>
+        <span>{t('prompts.title')}</span>
         <div style={{ display: 'flex', gap: 6 }}>
           <button type="button" className="quiet-button prompt-import-btn" onClick={() => void handleImport()}>
-            Import from file
+            {t('prompts.importFromFile')}
           </button>
           {!editing && !addingPrompt ? (
             <button type="button" className="quiet-button" style={{ fontSize: 11 }} onClick={handleAddPrompt}>
               <Plus size={12} aria-hidden />
-              {' '}Add prompt
+              {' '}{t('prompts.addPrompt')}
             </button>
           ) : null}
         </div>
@@ -1398,7 +1433,7 @@ function PromptLibrarySection(): JSX.Element {
                 <button
                   type="button"
                   className="icon-button"
-                  title="Edit"
+                  title={t('prompts.edit')}
                   onClick={() => handleEdit(prompt)}
                 >
                   <Settings2 size={12} aria-hidden />
@@ -1406,7 +1441,7 @@ function PromptLibrarySection(): JSX.Element {
                 <button
                   type="button"
                   className="icon-button"
-                  title="Delete"
+                  title={t('prompts.delete')}
                   onClick={() => void handleDelete(prompt.id)}
                 >
                   <Trash2 size={12} aria-hidden />
@@ -1416,7 +1451,7 @@ function PromptLibrarySection(): JSX.Element {
           ))
         ) : (
           <p className="prompt-list-empty">
-            No prompts yet. Add one below or import a Markdown file.
+            {t('prompts.noPrompts')}
           </p>
         )}
       </div>
@@ -1425,13 +1460,13 @@ function PromptLibrarySection(): JSX.Element {
         <div className="prompt-form">
           <input
             type="text"
-            placeholder="Prompt name"
+            placeholder={t('prompts.namePlaceholder')}
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
           />
           <textarea
             className="prompt-form-content"
-            placeholder="Prompt content…"
+            placeholder={t('prompts.contentPlaceholder')}
             rows={3}
             value={newContent}
             onChange={(e) => setNewContent(e.target.value)}
@@ -1443,11 +1478,11 @@ function PromptLibrarySection(): JSX.Element {
               disabled={!newName.trim() || !newContent.trim()}
               onClick={() => void handleSave()}
             >
-              {editing ? 'Save prompt' : 'Add prompt'}
+              {editing ? t('prompts.savePrompt') : t('prompts.addPrompt')}
             </button>
             {(editing || addingPrompt) ? (
               <button type="button" className="quiet-button" onClick={handleCancel}>
-                Cancel
+                {t('prompts.cancel')}
               </button>
             ) : null}
           </div>
