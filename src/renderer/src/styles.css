@@ -70,6 +70,11 @@ button {
   min-height: 0;
   background: var(--bg-window);
   color: var(--text-primary);
+  transition: grid-template-columns 260ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-shell.sidebar-hidden {
+  grid-template-columns: minmax(0, 1fr) 0px 0px;
 }
 
 .workspace {
@@ -87,6 +92,13 @@ button {
   cursor: col-resize;
   background: var(--bg-window);
   touch-action: none;
+  overflow: hidden;
+  transition: opacity 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-shell.sidebar-hidden .sidebar-resizer {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-resizer::before {
@@ -375,6 +387,13 @@ button {
   overflow: hidden;
   color: var(--text-primary);
   background: var(--bg-sidebar);
+  transform: translateX(0);
+  transition: transform 260ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-shell.sidebar-hidden .llm-panel {
+  transform: translateX(100%);
+  pointer-events: none;
 }
 
 .panel-header {

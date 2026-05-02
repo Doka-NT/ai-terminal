@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { Plus, Settings2, X } from 'lucide-react'
+import { PanelRightClose, PanelRightOpen, Plus, Settings2, X } from 'lucide-react'
 import type { TerminalSessionInfo } from '@shared/types'
 import { TerminalPane } from './components/TerminalPane'
 import { LlmPanel } from './components/LlmPanel'
@@ -17,6 +17,7 @@ const MAX_SIDEBAR_WIDTH = 720
 const MIN_WORKSPACE_WIDTH = 520
 const DEFAULT_TEXT_SIZE = 13.5
 const SIDEBAR_WIDTH_KEY = 'ai-terminal.sidebarWidth'
+const SIDEBAR_VISIBLE_KEY = 'ai-terminal.sidebarVisible'
 const TEXT_SIZE_KEY = 'ai-terminal.textSize'
 const LANGUAGE_KEY = 'ai-terminal.language'
 
@@ -55,6 +56,9 @@ export function App(): JSX.Element {
   const [selectedText, setSelectedText] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [terminalClearVersion, setTerminalClearVersion] = useState(0)
+  const [sidebarVisible, setSidebarVisible] = useState(() =>
+    window.localStorage.getItem(SIDEBAR_VISIBLE_KEY) !== 'false'
+  )
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     storedNumber(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
   )
@@ -87,6 +91,10 @@ export function App(): JSX.Element {
     const next = prev + data
     outputBuffers.current.set(sessionId, next.length > MAX_OUTPUT_CHARS ? next.slice(-MAX_OUTPUT_CHARS) : next)
   }, [])
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_VISIBLE_KEY, String(sidebarVisible))
+  }, [sidebarVisible])
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
@@ -139,6 +147,8 @@ export function App(): JSX.Element {
     const max = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - MIN_WORKSPACE_WIDTH))
     setSidebarWidth(clamp(value, MIN_SIDEBAR_WIDTH, max))
   }, [])
+
+  const toggleSidebar = useCallback(() => setSidebarVisible((v) => !v), [])
 
   const shellStyle = {
     '--sidebar-width': `${sidebarWidth}px`,
@@ -231,13 +241,26 @@ export function App(): JSX.Element {
         void createLocalSession()
       } else if (shortcut === 'close-tab') {
         closeActiveSession()
+      } else if (shortcut === 'toggle-sidebar') {
+        toggleSidebar()
       }
     })
-  }, [clearActiveTerminal, closeActiveSession, createLocalSession])
+  }, [clearActiveTerminal, closeActiveSession, createLocalSession, toggleSidebar])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+        e.preventDefault()
+        toggleSidebar()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [toggleSidebar])
 
   return (
     <LanguageProvider language={language}>
-    <main className="app-shell" style={shellStyle}>
+    <main className={`app-shell${sidebarVisible ? '' : ' sidebar-hidden'}`} style={shellStyle}>
       <section className="workspace">
         <header className="topbar">
           <div className="topbar-window-spacer" aria-hidden />
@@ -245,6 +268,9 @@ export function App(): JSX.Element {
           <div className="topbar-actions">
             <button className="icon-button" type="button" onClick={() => void createLocalSession()} title="New local terminal (⌘T)">
               <Plus size={16} aria-hidden />
+            </button>
+            <button className="icon-button" type="button" onClick={toggleSidebar} title={`${sidebarVisible ? 'Hide' : 'Show'} assistant sidebar (⌘\\)`}>
+              {sidebarVisible ? <PanelRightClose size={16} aria-hidden /> : <PanelRightOpen size={16} aria-hidden />}
             </button>
             <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} title="Settings (⌘,)">
               <Settings2 size={16} aria-hidden />
@@ -303,7 +329,7 @@ export function App(): JSX.Element {
         <TerminalPane
           activeSession={activeSession}
           sessionIds={sessions.map((session) => session.id)}
-          layoutKey={`${sidebarWidth}-${textSize}`}
+          layoutKey={`${sidebarWidth}-${textSize}-${sidebarVisible}`}
           textSize={textSize}
           clearSignal={terminalClearVersion}
           onSelectionChange={setSelectedText}
@@ -317,7 +343,8 @@ export function App(): JSX.Element {
         role="separator"
         aria-label="Resize assistant sidebar"
         aria-orientation="vertical"
-        onPointerDown={startSidebarResize}
+        aria-hidden={!sidebarVisible}
+        onPointerDown={sidebarVisible ? startSidebarResize : undefined}
       />
 
       <LlmPanel
