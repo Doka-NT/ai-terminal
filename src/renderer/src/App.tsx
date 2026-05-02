@@ -57,11 +57,15 @@ export function App(): JSX.Element {
   )
   const activeCwd = activeSession?.cwd ?? activeSession?.command ?? ''
 
+  const getOutputForSession = useCallback((sessionId: string): string => {
+    const buf = outputBuffers.current.get(sessionId) ?? ''
+    return buf.slice(-4000)
+  }, [])
+
   const getOutput = useCallback((): string => {
     if (!activeSessionId) return ''
-    const buf = outputBuffers.current.get(activeSessionId) ?? ''
-    return buf.slice(-4000)
-  }, [activeSessionId])
+    return getOutputForSession(activeSessionId)
+  }, [activeSessionId, getOutputForSession])
 
   const handleOutput = useCallback((sessionId: string, data: string) => {
     const prev = outputBuffers.current.get(sessionId) ?? ''
@@ -273,8 +277,10 @@ export function App(): JSX.Element {
 
       <LlmPanel
         activeSession={activeSession}
+        sessionIds={sessions.map((session) => session.id)}
         selectedText={selectedText}
         getOutput={getOutput}
+        getOutputForSession={getOutputForSession}
         settingsOpen={settingsOpen}
         onOpenSettings={() => setSettingsOpen(true)}
         onCloseSettings={() => setSettingsOpen(false)}
