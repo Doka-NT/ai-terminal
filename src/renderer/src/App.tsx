@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Plus, Settings2, X } from 'lucide-react'
 import type { TerminalSessionInfo } from '@shared/types'
 import { TerminalPane } from './components/TerminalPane'
@@ -210,6 +210,13 @@ export function App(): JSX.Element {
     void closeSession(activeSessionId)
   }, [activeSessionId, closeSession])
 
+  const handleTabbarDoubleClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null
+    if (target?.closest('.session-tab')) return
+
+    void createLocalSession()
+  }, [createLocalSession])
+
   useEffect(() => {
     return window.api.shortcuts.onShortcut((shortcut) => {
       if (shortcut === 'clear-terminal') {
@@ -241,7 +248,7 @@ export function App(): JSX.Element {
           </div>
         </header>
 
-        <div className="tabbar" role="tablist" aria-label="Terminal sessions">
+        <div className="tabbar" role="tablist" aria-label="Terminal sessions" onDoubleClick={handleTabbarDoubleClick}>
           <div className="tab-list">
             {sessions.map((session) => {
               const tabLabel = getTabLabel(session)
