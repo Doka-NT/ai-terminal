@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
@@ -21,9 +21,25 @@ import { assessCommandRisk, listModels, streamChatCompletion, summarizeConversat
 import { extractCommandProposals } from './utils/commandProposals'
 
 let mainWindow: BrowserWindow | undefined
+let currentHideShortcut = ''
 const terminalManager = new TerminalManager(() => mainWindow)
 const configStore = new ConfigStore()
 const promptStore = new PromptStore()
+
+function registerHideShortcut(shortcut: string): void {
+  if (currentHideShortcut) globalShortcut.unregister(currentHideShortcut)
+  currentHideShortcut = shortcut
+  globalShortcut.register(shortcut, () => {
+    if (!mainWindow) return
+    if (mainWindow.isVisible()) {
+      mainWindow.hide()
+    } else {
+      mainWindow.show()
+      mainWindow.focus()
+      mainWindow.webContents.send('app:window-show')
+    }
+  })
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -101,10 +117,20 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  void configStore.load().then((cfg) => {
+    registerHideShortcut(cfg.hideShortcut ?? 'CommandOrControl+Shift+Space')
+  })
 }
 
 function registerIpc(): void {
   ipcMain.handle('config:load', () => configStore.load())
+
+  ipcMain.handle('shortcut:setHide', async (_event, shortcut: string) => {
+    registerHideShortcut(shortcut)
+    const config = await configStore.load()
+    await configStore.save({ ...config, hideShortcut: shortcut })
+  })
 
   ipcMain.handle('terminal:create', (_event, request?: CreateTerminalRequest) => {
     return terminalManager.createLocal(request)
@@ -321,4 +347,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
 })

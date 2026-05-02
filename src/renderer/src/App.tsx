@@ -20,6 +20,7 @@ const SIDEBAR_WIDTH_KEY = 'ai-terminal.sidebarWidth'
 const SIDEBAR_VISIBLE_KEY = 'ai-terminal.sidebarVisible'
 const TEXT_SIZE_KEY = 'ai-terminal.textSize'
 const LANGUAGE_KEY = 'ai-terminal.language'
+const DEFAULT_HIDE_SHORTCUT = 'CommandOrControl+Shift+Space'
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -68,7 +69,9 @@ export function App(): JSX.Element {
   const [language, setLanguage] = useState<Language>(() =>
     (window.localStorage.getItem(LANGUAGE_KEY) as Language) ?? 'en'
   )
+  const [hideShortcut, setHideShortcut] = useState(DEFAULT_HIDE_SHORTCUT)
   const outputBuffers = useRef(new Map<string, string>())
+  const appShellRef = useRef<HTMLElement>(null)
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId),
@@ -107,6 +110,12 @@ export function App(): JSX.Element {
   useEffect(() => {
     window.localStorage.setItem(LANGUAGE_KEY, language)
   }, [language])
+
+  useEffect(() => {
+    void window.api.config.load().then((config) => {
+      if (config.hideShortcut) setHideShortcut(config.hideShortcut)
+    })
+  }, [])
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -149,6 +158,11 @@ export function App(): JSX.Element {
   }, [])
 
   const toggleSidebar = useCallback(() => setSidebarVisible((v) => !v), [])
+
+  const handleHideShortcutChange = useCallback((shortcut: string) => {
+    setHideShortcut(shortcut)
+    void window.api.shortcuts.setHide(shortcut)
+  }, [])
 
   const shellStyle = {
     '--sidebar-width': `${sidebarWidth}px`,
@@ -248,6 +262,16 @@ export function App(): JSX.Element {
   }, [clearActiveTerminal, closeActiveSession, createLocalSession, toggleSidebar])
 
   useEffect(() => {
+    return window.api.shortcuts.onWindowShow(() => {
+      const el = appShellRef.current
+      if (!el) return
+      el.classList.remove('window-entering')
+      void el.offsetWidth
+      el.classList.add('window-entering')
+    })
+  }, [])
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
         e.preventDefault()
@@ -260,7 +284,7 @@ export function App(): JSX.Element {
 
   return (
     <LanguageProvider language={language}>
-    <main className={`app-shell${sidebarVisible ? '' : ' sidebar-hidden'}`} style={shellStyle}>
+    <main ref={appShellRef} className={`app-shell${sidebarVisible ? '' : ' sidebar-hidden'}`} style={shellStyle}>
       <section className="workspace">
         <header className="topbar">
           <div className="topbar-window-spacer" aria-hidden />
@@ -362,6 +386,8 @@ export function App(): JSX.Element {
         onSidebarWidthChange={updateSidebarWidth}
         language={language}
         onLanguageChange={setLanguage}
+        hideShortcut={hideShortcut}
+        onHideShortcutChange={handleHideShortcutChange}
       />
     </main>
     </LanguageProvider>

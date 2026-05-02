@@ -109,6 +109,7 @@ export interface PromptTemplate {
 export interface AppConfig {
   providers: LLMProviderConfig[]
   activeProviderRef?: string
+  hideShortcut?: string
 }
 
 export interface ExportData {

@@ -15,7 +15,8 @@ const defaultConfig: AppConfig = {
       commandRiskModel: ''
     }
   ],
-  activeProviderRef: 'openai-compatible-default'
+  activeProviderRef: 'openai-compatible-default',
+  hideShortcut: 'CommandOrControl+Shift+Space'
 }
 
 export class ConfigStore {

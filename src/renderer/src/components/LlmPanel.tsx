@@ -106,6 +106,33 @@ function formatModelDisplay(modelId: string | undefined): string {
   return label.version ? `${label.name} — ${label.version}` : label.name
 }
 
+function electronToDisplay(shortcut: string): string {
+  return shortcut
+    .replace('CommandOrControl', '⌘')
+    .replace('Command', '⌘')
+    .replace('Ctrl', '⌃')
+    .replace('Control', '⌃')
+    .replace('Shift', '⇧')
+    .replace('Alt', '⌥')
+    .replace('Option', '⌥')
+    .replace(/\+/g, '')
+    .replace('Space', 'Space')
+}
+
+function keyEventToElectron(e: KeyboardEvent): string | null {
+  const parts: string[] = []
+  if (e.metaKey) parts.push('CommandOrControl')
+  else if (e.ctrlKey) parts.push('Ctrl')
+  if (e.shiftKey) parts.push('Shift')
+  if (e.altKey) parts.push('Alt')
+  const key = e.key
+  if (['Meta', 'Control', 'Shift', 'Alt'].includes(key)) return null
+  const keyName = key === ' ' ? 'Space' : key.length === 1 ? key.toUpperCase() : key
+  if (!parts.length) return null
+  parts.push(keyName)
+  return parts.join('+')
+}
+
 interface LlmPanelProps {
   activeSession?: TerminalSessionInfo & { status: 'running' | 'exited' }
   sessionIds: string[]
@@ -121,6 +148,8 @@ interface LlmPanelProps {
   onSidebarWidthChange: (sidebarWidth: number) => void
   language: Language
   onLanguageChange: (language: Language) => void
+  hideShortcut: string
+  onHideShortcutChange: (shortcut: string) => void
 }
 
 export function LlmPanel({
@@ -137,7 +166,9 @@ export function LlmPanel({
   sidebarWidth,
   onSidebarWidthChange,
   language,
-  onLanguageChange
+  onLanguageChange,
+  hideShortcut,
+  onHideShortcutChange
 }: LlmPanelProps): JSX.Element {
   const { t } = useT()
   const [provider, setProvider] = useState<LLMProviderConfig>(defaultProvider)
@@ -153,6 +184,7 @@ export function LlmPanel({
   const [hasApiKey, setHasApiKey] = useState(false)
   const [providerStatus, setProviderStatus] = useState('')
   const [dataStatus, setDataStatus] = useState('')
+  const [recordingShortcut, setRecordingShortcut] = useState(false)
   const [savePromptDialog, setSavePromptDialog] = useState<{ content: string } | null>(null)
   const [savePromptName, setSavePromptName] = useState('')
   const [savePromptStatus, setSavePromptStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -965,6 +997,35 @@ export function LlmPanel({
                           <option value="ru">{t('appearance.language.ru')}</option>
                           <option value="cn">{t('appearance.language.cn')}</option>
                         </select>
+                      </div>
+                    </div>
+                    <div className="appearance-row">
+                      <div className="appearance-row-left">
+                        <span className="appearance-row-label">{t('appearance.hideShortcut.label')}</span>
+                        <small className="appearance-row-desc">{t('appearance.hideShortcut.desc')}</small>
+                      </div>
+                      <div className="appearance-row-right">
+                        <button
+                          type="button"
+                          className={`shortcut-recorder ${recordingShortcut ? 'recording' : ''}`}
+                          onClick={() => setRecordingShortcut(true)}
+                          onKeyDown={recordingShortcut ? (event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            if (event.key === 'Escape') {
+                              setRecordingShortcut(false)
+                              return
+                            }
+                            const combo = keyEventToElectron(event.nativeEvent)
+                            if (combo) {
+                              onHideShortcutChange(combo)
+                              setRecordingShortcut(false)
+                            }
+                          } : undefined}
+                          onBlur={() => setRecordingShortcut(false)}
+                        >
+                          {recordingShortcut ? t('appearance.hideShortcut.recording') : electronToDisplay(hideShortcut)}
+                        </button>
                       </div>
                     </div>
                   </>

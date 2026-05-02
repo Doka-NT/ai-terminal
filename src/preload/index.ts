@@ -25,6 +25,14 @@ const api = {
       return () => {
         ipcRenderer.removeListener('app:shortcut', listener)
       }
+    },
+    setHide: (shortcut: string) => ipcRenderer.invoke('shortcut:setHide', shortcut) as Promise<void>,
+    onWindowShow: (callback: () => void) => {
+      const listener = () => callback()
+      ipcRenderer.on('app:window-show', listener)
+      return () => {
+        ipcRenderer.removeListener('app:window-show', listener)
+      }
     }
   },
   config: {

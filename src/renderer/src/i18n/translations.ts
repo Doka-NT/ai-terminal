@@ -18,6 +18,9 @@ export interface Translations {
   'appearance.language.en': string
   'appearance.language.ru': string
   'appearance.language.cn': string
+  'appearance.hideShortcut.label': string
+  'appearance.hideShortcut.desc': string
+  'appearance.hideShortcut.recording': string
 
   // Providers tab
   'providers.title': string
@@ -154,6 +157,9 @@ export const en: Translations = {
   'appearance.language.en': 'English',
   'appearance.language.ru': 'Русский',
   'appearance.language.cn': '中文',
+  'appearance.hideShortcut.label': 'Hide/Show shortcut',
+  'appearance.hideShortcut.desc': 'Global shortcut to toggle window visibility',
+  'appearance.hideShortcut.recording': 'Press a key combination...',
 
   'providers.title': 'Providers',
   'providers.name': 'Provider name',
@@ -280,6 +286,9 @@ export const ru: Translations = {
   'appearance.language.en': 'English',
   'appearance.language.ru': 'Русский',
   'appearance.language.cn': '中文',
+  'appearance.hideShortcut.label': 'Скрыть/показать окно',
+  'appearance.hideShortcut.desc': 'Глобальный шорткат для переключения видимости окна',
+  'appearance.hideShortcut.recording': 'Нажмите сочетание клавиш...',
 
   'providers.title': 'Провайдеры',
   'providers.name': 'Название провайдера',
@@ -406,6 +415,9 @@ export const cn: Translations = {
   'appearance.language.en': 'English',
   'appearance.language.ru': 'Русский',
   'appearance.language.cn': '中文',
+  'appearance.hideShortcut.label': '隐藏/显示快捷键',
+  'appearance.hideShortcut.desc': '用于切换窗口可见性的全局快捷键',
+  'appearance.hideShortcut.recording': '按下快捷键组合...',
 
   'providers.title': '提供商',
   'providers.name': '提供商名称',
