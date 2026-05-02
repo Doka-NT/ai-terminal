@@ -34,6 +34,21 @@ function storedPositiveNumber(key: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
+function getTabLabel(session: TerminalSessionInfo): string {
+  if (session.kind !== 'ssh') {
+    return session.label
+  }
+
+  const remoteTarget = session.remoteTarget?.trim()
+  if (!remoteTarget) {
+    return session.label
+  }
+
+  return session.label && session.label !== remoteTarget
+    ? `${session.label} · ${remoteTarget}`
+    : remoteTarget
+}
+
 export function App(): JSX.Element {
   const [sessions, setSessions] = useState<SessionState[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string>()
@@ -157,9 +172,18 @@ export function App(): JSX.Element {
       )
     })
 
+    const offSession = window.api.terminal.onSession((updatedSession) => {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === updatedSession.id ? { ...updatedSession, status: session.status } : session
+        )
+      )
+    })
+
     return () => {
       offExit()
       offCwd()
+      offSession()
     }
   }, [])
 
@@ -219,38 +243,48 @@ export function App(): JSX.Element {
 
         <div className="tabbar" role="tablist" aria-label="Terminal sessions">
           <div className="tab-list">
-            {sessions.map((session) => (
-              <button
-                className={`session-tab ${session.id === activeSessionId ? 'active' : ''}`}
-                key={session.id}
-                type="button"
-                role="tab"
-                aria-selected={session.id === activeSessionId}
-                onClick={() => setActiveSessionId(session.id)}
-              >
-                <span className={`status-dot ${session.status}`} />
-                <span className="tab-label">{session.label}</span>
-                <span className="tab-kind">{session.kind}</span>
-                <span
-                  className="tab-close"
-                  role="button"
-                  tabIndex={0}
-                  title="Close session (⌘W)"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void closeSession(session.id)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
+            {sessions.map((session) => {
+              const tabLabel = getTabLabel(session)
+              const tabClassName = [
+                'session-tab',
+                session.kind === 'ssh' ? 'ssh-session' : '',
+                session.id === activeSessionId ? 'active' : ''
+              ].filter(Boolean).join(' ')
+
+              return (
+                <button
+                  className={tabClassName}
+                  key={session.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={session.id === activeSessionId}
+                  title={tabLabel}
+                  onClick={() => setActiveSessionId(session.id)}
+                >
+                  <span className={`status-dot ${session.status}`} />
+                  <span className="tab-label">{tabLabel}</span>
+                  {session.kind !== 'ssh' ? <span className="tab-kind">{session.kind}</span> : null}
+                  <span
+                    className="tab-close"
+                    role="button"
+                    tabIndex={0}
+                    title="Close session (⌘W)"
+                    onClick={(event) => {
                       event.stopPropagation()
                       void closeSession(session.id)
-                    }
-                  }}
-                >
-                  <X size={9} aria-hidden />
-                </span>
-              </button>
-            ))}
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.stopPropagation()
+                        void closeSession(session.id)
+                      }
+                    }}
+                  >
+                    <X size={9} aria-hidden />
+                  </span>
+                </button>
+              )
+            })}
           </div>
           {activeCwd ? <div className="tabbar-cwd" title={activeCwd}>{activeCwd}</div> : null}
         </div>

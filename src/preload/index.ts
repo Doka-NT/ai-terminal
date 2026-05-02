@@ -58,6 +58,13 @@ const api = {
         ipcRenderer.removeListener('terminal:cwd', listener)
       }
     },
+    onSession: (callback: (session: TerminalSessionInfo) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, session: TerminalSessionInfo) => callback(session)
+      ipcRenderer.on('terminal:session', listener)
+      return () => {
+        ipcRenderer.removeListener('terminal:session', listener)
+      }
+    },
     onPrompt: (callback: (payload: { sessionId: string }) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) => callback(payload)
       ipcRenderer.on('terminal:prompt', listener)

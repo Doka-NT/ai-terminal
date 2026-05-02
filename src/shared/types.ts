@@ -6,8 +6,11 @@ export interface TerminalSessionInfo {
   id: string
   kind: TerminalSessionKind
   label: string
+  localLabel?: string
   cwd?: string
   shell?: string
+  remoteHost?: string
+  remoteTarget?: string
   command: string
   createdAt: number
 }
