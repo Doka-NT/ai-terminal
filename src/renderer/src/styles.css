@@ -817,9 +817,10 @@ textarea:focus {
 }
 
 .text-size-input {
-  width: 68px;
-  height: 36px;
+  width: 80px;
+  height: 32px;
   text-align: center;
+  font-size: 12px;
 }
 
 .text-size-applied {

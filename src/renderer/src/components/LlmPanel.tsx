@@ -164,6 +164,8 @@ interface LlmPanelProps {
   onLanguageChange: (language: Language) => void
   hideShortcut: string
   onHideShortcutChange: (shortcut: string) => void
+  maxOutputContext: number
+  onMaxOutputContextChange: (value: number) => void
   restoreSessions: boolean
   onRestoreSessionsChange: (enabled: boolean) => void
   restoredThreads: RestorableAssistantThreads
@@ -188,6 +190,8 @@ export function LlmPanel({
   onLanguageChange,
   hideShortcut,
   onHideShortcutChange,
+  maxOutputContext,
+  onMaxOutputContextChange,
   restoreSessions,
   onRestoreSessionsChange,
   restoredThreads,
@@ -203,6 +207,7 @@ export function LlmPanel({
   const [threadsBySessionId, setThreadsBySessionId] = useState<AssistantThreads>({})
   const [assistMode, setAssistMode] = useState<AssistMode>(DEFAULT_ASSIST_MODE)
   const [textSizeDraft, setTextSizeDraft] = useState(String(textSize))
+  const [maxOutputContextDraft, setMaxOutputContextDraft] = useState(String(maxOutputContext))
   const [settingsTab, setSettingsTab] = useState<'appearance' | 'providers' | 'prompts' | 'data'>('providers')
   const [editingApiKey, setEditingApiKey] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(false)
@@ -228,6 +233,7 @@ export function LlmPanel({
   const promptResolversRef = useRef(new Map<string, () => void>())
   const commandConfirmationResolversRef = useRef(new Map<string, (confirmed: boolean) => void>())
   const languageRef = useRef<Language>(language)
+  const maxOutputContextRef = useRef(maxOutputContext)
   const activeSessionId = activeSession?.id
   const sessionIdKey = sessionIds.join('\0')
   const activeThread = activeSessionId ? threadsBySessionId[activeSessionId] ?? createThread() : createThread()
@@ -235,6 +241,7 @@ export function LlmPanel({
 
   // Keep refs in sync
   useEffect(() => { languageRef.current = language }, [language])
+  useEffect(() => { maxOutputContextRef.current = maxOutputContext }, [maxOutputContext])
   useEffect(() => { threadsRef.current = threadsBySessionId }, [threadsBySessionId])
   useEffect(() => { onThreadsChange(toRestorableThreads(threadsBySessionId)) }, [threadsBySessionId, onThreadsChange])
   useEffect(() => {
@@ -247,6 +254,7 @@ export function LlmPanel({
   useEffect(() => { providerRef.current = provider }, [provider])
   useEffect(() => { selectedTextRef.current = selectedText }, [selectedText])
   useEffect(() => { setTextSizeDraft(String(textSize)) }, [textSize])
+  useEffect(() => { setMaxOutputContextDraft(String(maxOutputContext)) }, [maxOutputContext])
 
   // Shortcut recording via main process IPC
   useEffect(() => {
@@ -560,7 +568,7 @@ export function LlmPanel({
   const buildTerminalContext = useCallback((sessionId: string): TerminalContext => {
     const thread = getThread(sessionId)
     const session = thread.session ?? (activeSessionRef.current?.id === sessionId ? summarizeSession(activeSessionRef.current) : undefined)
-    const terminalOutput = stripAnsi(getOutputForSessionRef.current(sessionId)).slice(-3000)
+    const terminalOutput = stripAnsi(getOutputForSessionRef.current(sessionId)).slice(-maxOutputContextRef.current)
 
     return {
       selectedText: selectedTextRef.current,
@@ -681,7 +689,7 @@ export function LlmPanel({
 
     if (!getThread(sessionId).agenticRunning) return
 
-    const output = stripAnsi(getOutputForSessionRef.current(sessionId)).slice(-3000)
+    const output = stripAnsi(getOutputForSessionRef.current(sessionId)).slice(-maxOutputContextRef.current)
     const continuation =
       `Command \`${command}\` finished.\nOutput:\n\`\`\`\n${output}\n\`\`\`\nContinue.`
 
@@ -840,6 +848,15 @@ export function LlmPanel({
       onTextSizeChange(parsed)
     }
   }, [onTextSizeChange])
+
+  const handleMaxOutputContextChange = useCallback((value: string) => {
+    setMaxOutputContextDraft(value)
+
+    const parsed = parseInt(value, 10)
+    if (Number.isFinite(parsed) && parsed >= 1000) {
+      onMaxOutputContextChange(parsed)
+    }
+  }, [onMaxOutputContextChange])
 
   const handleExport = useCallback(async () => {
     setDataStatus('Exporting...')
@@ -1235,6 +1252,22 @@ export function LlmPanel({
                 {settingsTab === 'data' ? (
                   <>
                     <h3 className="settings-content-title">{t('data.title')}</h3>
+                    <div className="appearance-row">
+                      <div className="appearance-row-left">
+                        <span className="appearance-row-label">{t('appearance.outputContext.label')}</span>
+                        <small className="appearance-row-desc">{t('appearance.outputContext.desc')}</small>
+                      </div>
+                      <div className="appearance-row-right">
+                        <input
+                          className="text-size-input"
+                          type="number"
+                          step="1000"
+                          min="1000"
+                          value={maxOutputContextDraft}
+                          onChange={(event) => handleMaxOutputContextChange(event.target.value)}
+                        />
+                      </div>
+                    </div>
                     <div className="appearance-row">
                       <div className="appearance-row-left">
                         <span className="appearance-row-label">{t('data.restoreSessions.label')}</span>

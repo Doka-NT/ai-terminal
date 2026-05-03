@@ -22,6 +22,8 @@ export interface Translations {
   'appearance.hideShortcut.desc': string
   'appearance.hideShortcut.recording': string
   'appearance.hideShortcut.conflict': string
+  'appearance.outputContext.label': string
+  'appearance.outputContext.desc': string
 
   // Providers tab
   'providers.title': string
@@ -172,6 +174,8 @@ export const en: Translations = {
   'appearance.hideShortcut.desc': 'Global shortcut to toggle window visibility',
   'appearance.hideShortcut.recording': 'Press a key combination...',
   'appearance.hideShortcut.conflict': 'Shortcut {shortcut} is used by the system and cannot be assigned',
+  'appearance.outputContext.label': 'Output context for AI',
+  'appearance.outputContext.desc': 'Max characters of terminal output sent to the AI',
 
   'providers.title': 'Providers',
   'providers.name': 'Provider name',
@@ -311,6 +315,8 @@ export const ru: Translations = {
   'appearance.hideShortcut.desc': 'Глобальный шорткат для переключения видимости окна',
   'appearance.hideShortcut.recording': 'Нажмите сочетание клавиш...',
   'appearance.hideShortcut.conflict': 'Шорткат {shortcut} занят системой и не может быть назначен',
+  'appearance.outputContext.label': 'Контекст вывода для ИИ',
+  'appearance.outputContext.desc': 'Максимум символов вывода терминала, передаваемых ИИ',
 
   'providers.title': 'Провайдеры',
   'providers.name': 'Название провайдера',
@@ -450,6 +456,8 @@ export const cn: Translations = {
   'appearance.hideShortcut.desc': '用于切换窗口可见性的全局快捷键',
   'appearance.hideShortcut.recording': '按下快捷键组合...',
   'appearance.hideShortcut.conflict': '快捷键 {shortcut} 已被系统占用，无法分配',
+  'appearance.outputContext.label': 'AI输出上下文',
+  'appearance.outputContext.desc': '发送给AI的终端输出最大字符数',
 
   'providers.title': '提供商',
   'providers.name': '提供商名称',

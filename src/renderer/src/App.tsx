@@ -21,7 +21,9 @@ const SIDEBAR_VISIBLE_KEY = 'ai-terminal.sidebarVisible'
 const TEXT_SIZE_KEY = 'ai-terminal.textSize'
 const LANGUAGE_KEY = 'ai-terminal.language'
 const RESTORE_SESSIONS_KEY = 'ai-terminal.restoreSessions'
+const MAX_OUTPUT_CONTEXT_KEY = 'ai-terminal.maxOutputContext'
 const DEFAULT_HIDE_SHORTCUT = 'CommandOrControl+Shift+Space'
+const DEFAULT_MAX_OUTPUT_CONTEXT = 20000
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -75,6 +77,10 @@ export function App(): JSX.Element {
   )
   const [restoredAssistantThreads, setRestoredAssistantThreads] = useState<RestorableAssistantThreads>({})
   const [hideShortcut, setHideShortcut] = useState(DEFAULT_HIDE_SHORTCUT)
+  const [maxOutputContext, setMaxOutputContext] = useState(() =>
+    storedPositiveNumber(MAX_OUTPUT_CONTEXT_KEY, DEFAULT_MAX_OUTPUT_CONTEXT)
+  )
+  const maxOutputContextRef = useRef(maxOutputContext)
   const outputBuffers = useRef(new Map<string, string>())
   const appShellRef = useRef<HTMLElement>(null)
   const restoreInitializedRef = useRef(false)
@@ -93,7 +99,7 @@ export function App(): JSX.Element {
 
   const getOutputForSession = useCallback((sessionId: string): string => {
     const buf = outputBuffers.current.get(sessionId) ?? ''
-    return buf.slice(-4000)
+    return buf.slice(-maxOutputContextRef.current)
   }, [])
 
   const getOutput = useCallback((): string => {
@@ -160,6 +166,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     window.localStorage.setItem(LANGUAGE_KEY, language)
   }, [language])
+
+  useEffect(() => {
+    maxOutputContextRef.current = maxOutputContext
+    window.localStorage.setItem(MAX_OUTPUT_CONTEXT_KEY, String(maxOutputContext))
+  }, [maxOutputContext])
 
   useEffect(() => {
     restoreSessionsRef.current = restoreSessions
@@ -603,6 +614,8 @@ export function App(): JSX.Element {
         onLanguageChange={setLanguage}
         hideShortcut={hideShortcut}
         onHideShortcutChange={handleHideShortcutChange}
+        maxOutputContext={maxOutputContext}
+        onMaxOutputContextChange={setMaxOutputContext}
         restoreSessions={restoreSessions}
         onRestoreSessionsChange={setRestoreSessions}
         restoredThreads={restoredAssistantThreads}
