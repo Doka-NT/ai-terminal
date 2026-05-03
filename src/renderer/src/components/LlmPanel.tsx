@@ -17,6 +17,7 @@ import { buildSuggestionChips, formatModelLabel, statusToInlineStatus } from '@r
 import type { InlineStatus } from '@renderer/utils/redesign'
 import { useT } from '@renderer/i18n/LanguageContext'
 import type { Language } from '@renderer/i18n/translations'
+import { acceleratorToDisplay } from '@shared/accelerator'
 
 // ...existing code...
 
@@ -143,30 +144,7 @@ function formatModelDisplay(modelId: string | undefined): string {
 }
 
 function electronToDisplay(shortcut: string): string {
-  return shortcut
-    .replace('CommandOrControl', '⌘')
-    .replace('Command', '⌘')
-    .replace('Ctrl', '⌃')
-    .replace('Control', '⌃')
-    .replace('Shift', '⇧')
-    .replace('Alt', '⌥')
-    .replace('Option', '⌥')
-    .replace(/\+/g, '')
-    .replace('Space', 'Space')
-}
-
-function keyEventToElectron(e: KeyboardEvent): string | null {
-  const parts: string[] = []
-  if (e.metaKey) parts.push('CommandOrControl')
-  else if (e.ctrlKey) parts.push('Ctrl')
-  if (e.shiftKey) parts.push('Shift')
-  if (e.altKey) parts.push('Alt')
-  const key = e.key
-  if (['Meta', 'Control', 'Shift', 'Alt'].includes(key)) return null
-  const keyName = key === ' ' ? 'Space' : key.length === 1 ? key.toUpperCase() : key
-  if (!parts.length) return null
-  parts.push(keyName)
-  return parts.join('+')
+  return acceleratorToDisplay(shortcut)
 }
 
 interface LlmPanelProps {
@@ -231,6 +209,7 @@ export function LlmPanel({
   const [providerStatus, setProviderStatus] = useState('')
   const [dataStatus, setDataStatus] = useState('')
   const [recordingShortcut, setRecordingShortcut] = useState(false)
+  const [shortcutError, setShortcutError] = useState<string | null>(null)
   const [savePromptDialog, setSavePromptDialog] = useState<{ content: string } | null>(null)
   const [savePromptName, setSavePromptName] = useState('')
   const [savePromptStatus, setSavePromptStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -268,6 +247,28 @@ export function LlmPanel({
   useEffect(() => { providerRef.current = provider }, [provider])
   useEffect(() => { selectedTextRef.current = selectedText }, [selectedText])
   useEffect(() => { setTextSizeDraft(String(textSize)) }, [textSize])
+
+  // Shortcut recording via main process IPC
+  useEffect(() => {
+    if (!recordingShortcut) return
+    const unsubscribe = window.api.shortcuts.onRecorded((accelerator) => {
+      void (async () => {
+        setRecordingShortcut(false)
+        setShortcutError(null)
+        const success = await window.api.shortcuts.setHide(accelerator)
+        if (success) {
+          onHideShortcutChange(accelerator)
+        } else {
+          setShortcutError(accelerator)
+        }
+      })()
+    })
+    void window.api.shortcuts.startRecording()
+    return () => {
+      unsubscribe()
+      void window.api.shortcuts.stopRecording()
+    }
+  }, [recordingShortcut, onHideShortcutChange])
 
   const summarizeSession = useCallback((session: TerminalSessionInfo): Pick<TerminalSessionInfo, 'id' | 'kind' | 'label' | 'cwd' | 'shell'> => ({
     id: session.id,
@@ -1081,24 +1082,15 @@ export function LlmPanel({
                         <button
                           type="button"
                           className={`shortcut-recorder ${recordingShortcut ? 'recording' : ''}`}
-                          onClick={() => setRecordingShortcut(true)}
-                          onKeyDown={recordingShortcut ? (event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            if (event.key === 'Escape') {
-                              setRecordingShortcut(false)
-                              return
-                            }
-                            const combo = keyEventToElectron(event.nativeEvent)
-                            if (combo) {
-                              onHideShortcutChange(combo)
-                              setRecordingShortcut(false)
-                            }
-                          } : undefined}
-                          onBlur={() => setRecordingShortcut(false)}
+                          onClick={() => { setRecordingShortcut(true); setShortcutError(null) }}
                         >
                           {recordingShortcut ? t('appearance.hideShortcut.recording') : electronToDisplay(hideShortcut)}
                         </button>
+                        {shortcutError && (
+                          <small className="shortcut-error">
+                            {t('appearance.hideShortcut.conflict', { shortcut: electronToDisplay(shortcutError) })}
+                          </small>
+                        )}
                       </div>
                     </div>
                   </>

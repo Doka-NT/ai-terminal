@@ -21,18 +21,19 @@ import { SessionStateStore } from './services/sessionStateStore'
 import { deleteApiKey, getApiKey, saveApiKey } from './services/secretStore'
 import { assessCommandRisk, listModels, streamChatCompletion, summarizeConversation } from './services/llmService'
 import { extractCommandProposals } from './utils/commandProposals'
+import { buildAccelerator } from '../shared/accelerator'
 
 let mainWindow: BrowserWindow | undefined
 let currentHideShortcut = ''
+let isRecordingShortcut = false
 const terminalManager = new TerminalManager(() => mainWindow)
 const configStore = new ConfigStore()
 const promptStore = new PromptStore()
 const sessionStateStore = new SessionStateStore()
 
-function registerHideShortcut(shortcut: string): void {
+function registerHideShortcut(shortcut: string): boolean {
   if (currentHideShortcut) globalShortcut.unregister(currentHideShortcut)
-  currentHideShortcut = shortcut
-  globalShortcut.register(shortcut, () => {
+  const success = globalShortcut.register(shortcut, () => {
     if (!mainWindow) return
     if (mainWindow.isVisible()) {
       mainWindow.hide()
@@ -42,6 +43,24 @@ function registerHideShortcut(shortcut: string): void {
       mainWindow.webContents.send('app:window-show')
     }
   })
+  if (success) {
+    currentHideShortcut = shortcut
+  } else {
+    // Re-register previous shortcut if new one failed
+    if (currentHideShortcut) {
+      globalShortcut.register(currentHideShortcut, () => {
+        if (!mainWindow) return
+        if (mainWindow.isVisible()) {
+          mainWindow.hide()
+        } else {
+          mainWindow.show()
+          mainWindow.focus()
+          mainWindow.webContents.send('app:window-show')
+        }
+      })
+    }
+  }
+  return success
 }
 
 function createWindow(): void {
@@ -81,13 +100,24 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.isAutoRepeat) return
+
+    // Shortcut recording mode: capture any key combo and send to renderer
+    if (isRecordingShortcut) {
+      const accelerator = buildAccelerator(!!input.meta, !!input.control, !!input.shift, !!input.alt, input.code ?? '')
+      if (accelerator) {
+        event.preventDefault()
+        mainWindow?.webContents.send('shortcut:recorded', accelerator)
+        isRecordingShortcut = false
+      }
+      return
+    }
+
     if (
-      input.type !== 'keyDown' ||
       !input.meta ||
       input.control ||
       input.alt ||
-      input.shift ||
-      input.isAutoRepeat
+      input.shift
     ) {
       return
     }
@@ -130,9 +160,20 @@ function registerIpc(): void {
   ipcMain.handle('config:load', () => configStore.load())
 
   ipcMain.handle('shortcut:setHide', async (_event, shortcut: string) => {
-    registerHideShortcut(shortcut)
-    const config = await configStore.load()
-    await configStore.save({ ...config, hideShortcut: shortcut })
+    const success = registerHideShortcut(shortcut)
+    if (success) {
+      const config = await configStore.load()
+      await configStore.save({ ...config, hideShortcut: shortcut })
+    }
+    return success
+  })
+
+  ipcMain.handle('shortcut:startRecording', () => {
+    isRecordingShortcut = true
+  })
+
+  ipcMain.handle('shortcut:stopRecording', () => {
+    isRecordingShortcut = false
   })
 
   ipcMain.handle('terminal:create', (_event, request?: CreateTerminalRequest) => {

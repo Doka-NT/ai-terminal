@@ -21,6 +21,7 @@ export interface Translations {
   'appearance.hideShortcut.label': string
   'appearance.hideShortcut.desc': string
   'appearance.hideShortcut.recording': string
+  'appearance.hideShortcut.conflict': string
 
   // Providers tab
   'providers.title': string
@@ -170,6 +171,7 @@ export const en: Translations = {
   'appearance.hideShortcut.label': 'Hide/Show shortcut',
   'appearance.hideShortcut.desc': 'Global shortcut to toggle window visibility',
   'appearance.hideShortcut.recording': 'Press a key combination...',
+  'appearance.hideShortcut.conflict': 'Shortcut {shortcut} is used by the system and cannot be assigned',
 
   'providers.title': 'Providers',
   'providers.name': 'Provider name',
@@ -308,6 +310,7 @@ export const ru: Translations = {
   'appearance.hideShortcut.label': 'Скрыть/показать окно',
   'appearance.hideShortcut.desc': 'Глобальный шорткат для переключения видимости окна',
   'appearance.hideShortcut.recording': 'Нажмите сочетание клавиш...',
+  'appearance.hideShortcut.conflict': 'Шорткат {shortcut} занят системой и не может быть назначен',
 
   'providers.title': 'Провайдеры',
   'providers.name': 'Название провайдера',
@@ -446,6 +449,7 @@ export const cn: Translations = {
   'appearance.hideShortcut.label': '隐藏/显示快捷键',
   'appearance.hideShortcut.desc': '用于切换窗口可见性的全局快捷键',
   'appearance.hideShortcut.recording': '按下快捷键组合...',
+  'appearance.hideShortcut.conflict': '快捷键 {shortcut} 已被系统占用，无法分配',
 
   'providers.title': '提供商',
   'providers.name': '提供商名称',

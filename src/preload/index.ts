@@ -28,7 +28,16 @@ const api = {
         ipcRenderer.removeListener('app:shortcut', listener)
       }
     },
-    setHide: (shortcut: string) => ipcRenderer.invoke('shortcut:setHide', shortcut) as Promise<void>,
+    setHide: (shortcut: string) => ipcRenderer.invoke('shortcut:setHide', shortcut) as Promise<boolean>,
+    startRecording: () => ipcRenderer.invoke('shortcut:startRecording') as Promise<void>,
+    stopRecording: () => ipcRenderer.invoke('shortcut:stopRecording') as Promise<void>,
+    onRecorded: (callback: (accelerator: string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, accelerator: string) => callback(accelerator)
+      ipcRenderer.on('shortcut:recorded', listener)
+      return () => {
+        ipcRenderer.removeListener('shortcut:recorded', listener)
+      }
+    },
     onWindowShow: (callback: () => void) => {
       const listener = () => callback()
       ipcRenderer.on('app:window-show', listener)

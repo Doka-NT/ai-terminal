@@ -860,6 +860,14 @@ textarea:focus {
   color: var(--accent-cyan);
 }
 
+.shortcut-error {
+  display: block;
+  color: var(--accent-red, #f87171);
+  font-size: 11px;
+  margin-top: 4px;
+  line-height: 1.3;
+}
+
 /* Providers tab */
 
 .providers-layout {
