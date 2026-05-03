@@ -493,6 +493,11 @@ export function App(): JSX.Element {
       el.classList.remove('window-entering')
       void el.offsetWidth
       el.classList.add('window-entering')
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.api.shortcuts.notifyWindowReady()
+        })
+      })
     })
   }, [])
 

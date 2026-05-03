@@ -38,6 +38,7 @@ function registerHideShortcut(shortcut: string): boolean {
     if (mainWindow.isVisible()) {
       mainWindow.hide()
     } else {
+      mainWindow.setOpacity(0)
       mainWindow.show()
       mainWindow.focus()
       mainWindow.webContents.send('app:window-show')
@@ -53,6 +54,7 @@ function registerHideShortcut(shortcut: string): boolean {
         if (mainWindow.isVisible()) {
           mainWindow.hide()
         } else {
+          mainWindow.setOpacity(0)
           mainWindow.show()
           mainWindow.focus()
           mainWindow.webContents.send('app:window-show')
@@ -166,6 +168,10 @@ function registerIpc(): void {
       await configStore.save({ ...config, hideShortcut: shortcut })
     }
     return success
+  })
+
+  ipcMain.on('app:window-ready', () => {
+    mainWindow?.setOpacity(1)
   })
 
   ipcMain.handle('shortcut:startRecording', () => {

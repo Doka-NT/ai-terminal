@@ -44,7 +44,8 @@ const api = {
       return () => {
         ipcRenderer.removeListener('app:window-show', listener)
       }
-    }
+    },
+    notifyWindowReady: () => ipcRenderer.send('app:window-ready')
   },
   config: {
     load: () => ipcRenderer.invoke('config:load') as Promise<AppConfig>
