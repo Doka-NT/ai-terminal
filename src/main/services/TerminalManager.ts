@@ -375,7 +375,10 @@ function buildHookEnv(shell: string | undefined): HookEnv {
     writeFileSync(join(tmpDir, '.zshrc'), [
       `___ait_default_zdotdir=${realZdotdirLiteral}`,
       'ZDOTDIR="${___AIT_USER_ZDOTDIR:-$___ait_default_zdotdir}"',
+      'HISTFILE="${ZDOTDIR:-$HOME}/.zsh_history"',
       '[ -f "$ZDOTDIR/.zshrc" ] && source "$ZDOTDIR/.zshrc" 2>/dev/null',
+      'fc -R "$HISTFILE" 2>/dev/null || true',
+      'unset ZSH_AUTOSUGGEST_USE_ASYNC',
       '___ait_precmd() { printf "\\033]6973;PROMPT\\007"; }',
       'precmd_functions+=(___ait_precmd)',
       'unset ___AIT_USER_ZDOTDIR ___ait_boot_zdotdir ___ait_default_zdotdir ___ait_user_zdotdir'

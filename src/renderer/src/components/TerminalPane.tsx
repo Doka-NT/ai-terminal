@@ -39,7 +39,6 @@ export function TerminalPane({
   useEffect(() => {
     const terminal = new Terminal({
       cursorBlink: true,
-      convertEol: true,
       fontFamily: '"SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace',
       fontSize: textSizeRef.current,
       lineHeight: 1.25,
