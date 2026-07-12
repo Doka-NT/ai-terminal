@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:ui:screenshots": "npm run build && node scripts/run-security-ui-screenshots.mjs",
+    "test:ui:theme-default-screenshots": "npm run build && node scripts/run-theme-default-ui-screenshots.mjs",
     "test:ui:telemetry-screenshots": "npm run build && node scripts/run-telemetry-ui-screenshots.mjs",
     "qa:pr": "node scripts/qa-pr-ai.mjs",
     "lint": "eslint src tests electron.vite.config.ts vitest.config.ts",
