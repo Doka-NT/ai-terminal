@@ -1342,4 +1342,4 @@ export const themeMap: Record<string, AppTheme> = Object.fromEntries(
   themes.map((theme) => [theme.id, theme])
 )
 
-export const DEFAULT_THEME_ID = 'taviraq-dark'
+export const DEFAULT_THEME_ID = 'horizon'

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { ChevronLeft, Command, Copy, Pencil, PlugZap, RotateCcw, Server, SquareTerminal, Terminal, Wifi, WifiOff, X, PanelRightClose, PanelRightOpen, Plus, Settings2, ShieldAlert } from 'lucide-react'
 import type { AssistMode, CommandSnippet, PromptTemplate, RestorableAssistantThread, RestorableAssistantThreads, RestoredTerminalSession, SessionStateSnapshot, SSHProfileConfig, TerminalBlock, TerminalCursorStyle, TerminalSessionInfo } from '@shared/types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
@@ -201,7 +201,7 @@ function migrateLocalStorageKeys(): void {
 
     window.localStorage.setItem(
       nextKey,
-      legacyValue === 'ai-terminal-dark' ? DEFAULT_THEME_ID : legacyValue
+      legacyValue === 'ai-terminal-dark' ? 'taviraq-dark' : legacyValue
     )
   }
 }
@@ -660,8 +660,11 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     window.localStorage.setItem(THEME_KEY, themeId)
+  }, [themeId])
+
+  useLayoutEffect(() => {
     applyThemeToDom(currentTheme)
-  }, [themeId, currentTheme])
+  }, [currentTheme])
 
   useEffect(() => {
     maxOutputContextRef.current = maxOutputContext
