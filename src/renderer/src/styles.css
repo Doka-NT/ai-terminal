@@ -6108,12 +6108,24 @@ textarea:focus {
 .bounded-scroll-wrapper {
   display: grid;
   gap: 6px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .bounded-scroll {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   max-height: min(40vh, 320px);
+  overflow-x: hidden;
   overflow-y: auto;
   border-radius: 4px;
+}
+
+.bounded-scroll > div {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .bounded-scroll-wrapper.expanded .bounded-scroll,
