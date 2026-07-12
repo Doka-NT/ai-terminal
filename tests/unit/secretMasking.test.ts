@@ -12,8 +12,10 @@ import {
   createStreamingUnmasker,
   diffSecretMaskContext,
   displaySecretPlaceholders,
+  findBareHighEntropySecrets,
   findCustomPatternSecrets,
   findSupplementalStrictSecrets,
+  maskChatStreamRequest,
   maskTextForDisplay,
   maskText,
   parseGitleaksReport,
@@ -96,6 +98,65 @@ describe('secret masking utilities', () => {
     ].join('\n'))
 
     expect(findings.map((finding) => finding.secret)).toEqual(['AbCdEf1234567890_AbCdEf1234567890'])
+  })
+
+  it('finds a bare Google OAuth authorization code with no surrounding keyword', () => {
+    const code = '4/0AXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+    const findings = findSupplementalStrictSecrets(`pasted by accident: ${code}`)
+
+    expect(findings).toEqual([{
+      ruleId: 'taviraq-google-oauth-code',
+      description: 'Google OAuth authorization code',
+      secret: code,
+      match: code
+    }])
+  })
+
+  it('finds a bare Google OAuth refresh token with no surrounding keyword', () => {
+    const token = '1//0gXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+    const findings = findSupplementalStrictSecrets(`pasted by accident: ${token}`)
+
+    expect(findings).toEqual([{
+      ruleId: 'taviraq-google-oauth-refresh-token',
+      description: 'Google OAuth refresh token',
+      secret: token,
+      match: token
+    }])
+  })
+
+  it('finds a bare high-entropy token with no keyword or provider prefix', () => {
+    const token = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
+    const findings = findBareHighEntropySecrets(`pasted by accident: ${token}`)
+
+    expect(findings).toEqual([{
+      ruleId: 'taviraq-bare-high-entropy',
+      description: 'Taviraq bare high-entropy value',
+      secret: token,
+      match: token
+    }])
+  })
+
+  it('does not flag benign high-entropy-looking values as bare secrets', () => {
+    const gitSha = '2df91d10f0802b5eb69f93333bf3b64b98003113'
+    const uuid = '550e8400-e29b-41d4-a716-446655440000'
+    // Contains a digit on purpose: a naive \b-based tokenizer drops the leading "/"
+    // from an absolute path (since \b is defined relative to \w, not this charset),
+    // which would defeat isLikelyFilesystemPath() and, with a digit present, get
+    // misread as high entropy. This is a regression test for that exact failure mode.
+    const pathWithDigit = '/Users/artem/Projects/site-v2/dist/bundle-2024-final.js'
+    const npmIntegrity = 'sha512-CoI4x1F1Ug7l8xVEkGdT7GcQlORISlqOGCLc0/wLo4LcYbaEV9dLtOwsAxpqGKfPBhpZH1lgloxNIfeDo8gkAg=='
+
+    expect(findBareHighEntropySecrets(gitSha)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(uuid)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(pathWithDigit)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(npmIntegrity)).toHaveLength(0)
+  })
+
+  it('caps bare-entropy findings to avoid unbounded scans', () => {
+    const tokens = Array.from({ length: 60 }, (_, i) => `Tok3n_${i}_aB3xQ9kL7mZpR2vT8nW1cY4dF6gH5j`)
+    const findings = findBareHighEntropySecrets(tokens.join(' '))
+
+    expect(findings.length).toBeLessThanOrEqual(40)
   })
 
   it('finds custom regex secrets using the first capture group', () => {
@@ -353,5 +414,29 @@ describe('secret masking utilities', () => {
     expect(sanitized.messages[0].content).toBe('OPENAI_API_KEY=[secret]')
     expect(sanitized.messages[1].output).toBe('token [secret]')
     expect(sanitized.messages[1].reasoningContent).toBe('saw [secret]')
+  })
+
+  it('masks a bare-pasted terminal secret in the outgoing provider request (issue #211)', async () => {
+    const bareToken = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
+    const oauthCode = '4/0AXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+
+    const { request, context } = await maskChatStreamRequest({
+      requestId: 'req-1',
+      provider: { name: 'test-provider', baseUrl: 'https://example.test', apiKeyRef: 'test-key' },
+      messages: [{ role: 'user', content: 'what does this terminal output mean?' }],
+      context: {
+        selectedText: '',
+        terminalOutput: [
+          `$ echo pasted a token by accident: ${bareToken}`,
+          `$ echo also pasted an oauth code: ${oauthCode}`
+        ].join('\n')
+      }
+    }, 'on')
+
+    expect(request.context.terminalOutput).not.toContain(bareToken)
+    expect(request.context.terminalOutput).not.toContain(oauthCode)
+    expect(context.bindings.map((binding) => binding.kind)).toEqual(
+      expect.arrayContaining(['BARE_HIGH_ENTROPY', 'GOOGLE_OAUTH_CODE'])
+    )
   })
 })

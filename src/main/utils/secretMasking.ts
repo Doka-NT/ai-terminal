@@ -14,6 +14,7 @@ import type {
 } from '@shared/types'
 import type { MaskingRuleProvider } from '@main/capabilities'
 import {
+  BARE_SECRET_MAX_MATCHES,
   CUSTOM_SECRET_PATTERN_MAX_MATCHES,
   CUSTOM_SECRET_SCAN_MAX_TEXT_LENGTH,
   createDefaultSecretMaskingSettings,
@@ -289,12 +290,13 @@ export async function scanTextForSecrets(
   const supplementalFindings = findSupplementalStrictSecrets(text)
   const customFindings = findCustomPatternSecrets(text, settings)
   const providerFindings = collectProviderSecretFindings(maskingProviders, text, settings)
+  const bareEntropyFindings = findBareHighEntropySecrets(text)
   try {
     const gitleaksFindings = await runGitleaks(text, signal)
-    return [...customFindings, ...gitleaksFindings, ...supplementalFindings, ...providerFindings]
+    return [...customFindings, ...gitleaksFindings, ...supplementalFindings, ...providerFindings, ...bareEntropyFindings]
   } catch (error) {
     if (isGitleaksUnavailableError(error)) {
-      return [...customFindings, ...supplementalFindings, ...providerFindings]
+      return [...customFindings, ...supplementalFindings, ...providerFindings, ...bareEntropyFindings]
     }
     throw error
   }
@@ -387,6 +389,57 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
         match: match[0]
       })
     }
+  }
+
+  const oauthAuthorizationCodeRe = /\b4\/[0-9A-Za-z_-]{20,}\b/g
+  for (const match of text.matchAll(oauthAuthorizationCodeRe)) {
+    findings.push({
+      ruleId: 'taviraq-google-oauth-code',
+      description: 'Google OAuth authorization code',
+      secret: match[0],
+      match: match[0]
+    })
+  }
+
+  const oauthRefreshTokenRe = /\b1\/\/[0-9A-Za-z_-]{20,}\b/g
+  for (const match of text.matchAll(oauthRefreshTokenRe)) {
+    findings.push({
+      ruleId: 'taviraq-google-oauth-refresh-token',
+      description: 'Google OAuth refresh token',
+      secret: match[0],
+      match: match[0]
+    })
+  }
+
+  return findings
+}
+
+const INTEGRITY_HASH_PREFIX_RE = /^sha(?:1|256|384|512)-/i
+// Split (not \b-matchAll) on purpose: \b is defined relative to \w, which does not
+// include several chars this charset allows (e.g. "/"). Matching with \b would drop a
+// leading "/" from an absolute path, defeating isLikelyFilesystemPath() below.
+// "=" is deliberately NOT part of the kept charset: unlike the rest of this set, it
+// shows up in real text as a KEY=VALUE delimiter, not just inside a token, and keeping
+// it would glue an assignment's identifier onto its value into one over-broad match
+// (e.g. "API_KEY=abc..." masked whole instead of just "abc..."). Real base64 padding
+// is at most the last couple of characters of a secret, so treating "=" as a
+// delimiter only costs those trailing characters, not the secret itself.
+const BARE_ENTROPY_TOKEN_SPLIT_RE = /[^A-Za-z0-9._~+/-]+/
+
+export function findBareHighEntropySecrets(text: string): SecretFinding[] {
+  const findings: SecretFinding[] = []
+
+  for (const value of text.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
+    if (findings.length >= BARE_SECRET_MAX_MATCHES) break
+    if (INTEGRITY_HASH_PREFIX_RE.test(value)) continue
+    if (!looksHighEntropy(value)) continue
+
+    findings.push({
+      ruleId: 'taviraq-bare-high-entropy',
+      description: 'Taviraq bare high-entropy value',
+      secret: value,
+      match: value
+    })
   }
 
   return findings
