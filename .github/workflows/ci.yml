@@ -48,3 +48,11 @@ jobs:
 
       - name: Chat layout regression
         run: xvfb-run -a node scripts/run-chat-tools-ui-screenshots.mjs
+
+      - name: Upload chat layout screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-layout-screenshots
+          path: screenshots/chat-tools-ui
+          if-no-files-found: warn
