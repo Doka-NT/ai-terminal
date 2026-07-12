@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { ChevronLeft, Command, Copy, Pencil, PlugZap, RotateCcw, Server, SquareTerminal, Terminal, Wifi, WifiOff, X, PanelRightClose, PanelRightOpen, Plus, Settings2, ShieldAlert } from 'lucide-react'
 import type { AssistMode, CommandSnippet, PromptTemplate, RestorableAssistantThread, RestorableAssistantThreads, RestoredTerminalSession, SessionStateSnapshot, SSHProfileConfig, TerminalBlock, TerminalCursorStyle, TerminalSessionInfo } from '@shared/types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
@@ -11,7 +11,6 @@ import { LanguageProvider } from './i18n/LanguageContext'
 import { TRANSLATIONS, type Language, type Translations } from './i18n/translations'
 import { themeMap, themes, DEFAULT_THEME_ID } from './themes/definitions'
 import { applyThemeToDom } from './themes/applyTheme'
-import { migrateLegacyThemeId, resolveThemeId } from './themes/themePreference'
 import type { TerminalColors } from './themes/types'
 import { findBufferedCommandStartOffset, findCommandStartOffset, lineMatchesCommandStart, stripCommandEcho } from './utils/terminalBlocks'
 import { compactPath, getCwdBasename, getSessionStatusMeta, getSessionTooltip, getSshTabIndicatorTitle, getTabLabel, isLiveSessionStatus, mergeRestoredSessionOutput, type SessionTabStatus } from './utils/sessionTabs'
@@ -200,7 +199,10 @@ function migrateLocalStorageKeys(): void {
     const legacyValue = window.localStorage.getItem(legacyKey)
     if (legacyValue === null) continue
 
-    window.localStorage.setItem(nextKey, key === 'theme' ? migrateLegacyThemeId(legacyValue) : legacyValue)
+    window.localStorage.setItem(
+      nextKey,
+      legacyValue === 'ai-terminal-dark' ? 'taviraq-dark' : legacyValue
+    )
   }
 }
 
@@ -308,13 +310,10 @@ export function App(): JSX.Element {
     (window.localStorage.getItem(LANGUAGE_KEY) as Language) ?? 'en'
   )
   const [themeId, setThemeId] = useState<string>(() =>
-    resolveThemeId(window.localStorage.getItem(THEME_KEY))
+    window.localStorage.getItem(THEME_KEY) || DEFAULT_THEME_ID
   )
   const currentTheme = themeMap[themeId] ?? themeMap[DEFAULT_THEME_ID]
   const terminalTheme: TerminalColors = currentTheme.terminal
-  const handleThemeChange = useCallback((nextThemeId: string) => {
-    setThemeId(resolveThemeId(nextThemeId))
-  }, [])
   const [restoreSessions, setRestoreSessions] = useState(() =>
     window.localStorage.getItem(RESTORE_SESSIONS_KEY) !== 'false'
   )
@@ -661,11 +660,8 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     window.localStorage.setItem(THEME_KEY, themeId)
-  }, [themeId])
-
-  useLayoutEffect(() => {
     applyThemeToDom(currentTheme)
-  }, [currentTheme])
+  }, [themeId, currentTheme])
 
   useEffect(() => {
     maxOutputContextRef.current = maxOutputContext
@@ -1375,7 +1371,7 @@ export function App(): JSX.Element {
     }
 
     if (action.id.startsWith('theme:')) {
-      handleThemeChange(action.id.slice('theme:'.length))
+      setThemeId(action.id.slice('theme:'.length))
     }
   }, [
     commandPalettePrompts,
@@ -1384,7 +1380,6 @@ export function App(): JSX.Element {
     connectSshProfile,
     createLocalSession,
     insertCommandSnippet,
-    handleThemeChange,
     openSettingsTab,
     showSidebar,
     sshProfiles
@@ -1771,7 +1766,7 @@ export function App(): JSX.Element {
         language={language}
         onLanguageChange={setLanguage}
         themeId={themeId}
-        onThemeChange={handleThemeChange}
+        onThemeChange={setThemeId}
         hideShortcut={hideShortcut}
         onHideShortcutChange={handleHideShortcutChange}
         maxOutputContext={maxOutputContext}
