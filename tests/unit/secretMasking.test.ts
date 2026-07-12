@@ -159,6 +159,17 @@ describe('secret masking utilities', () => {
     expect(findings.length).toBeLessThanOrEqual(40)
   })
 
+  it('does not let repeated duplicate values exhaust the cap before a later distinct secret', () => {
+    const repeated = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
+    const laterDistinctSecret = 'zZ9yQ8-jK6nM_oP1wS7vU3bX5eG4fH2i'
+    const text = [...Array.from({ length: 50 }, () => repeated), laterDistinctSecret].join(' ')
+
+    const values = findBareHighEntropySecrets(text).map((finding) => finding.secret)
+
+    expect(values.filter((value) => value === repeated)).toHaveLength(1)
+    expect(values).toContain(laterDistinctSecret)
+  })
+
   it('finds custom regex secrets using the first capture group', () => {
     const settings = {
       mode: 'on' as const,

@@ -428,18 +428,25 @@ const BARE_ENTROPY_TOKEN_SPLIT_RE = /[^A-Za-z0-9._~+/-]+/
 
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   const findings: SecretFinding[] = []
+  const seen = new Set<string>()
 
   for (const value of text.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
-    if (findings.length >= BARE_SECRET_MAX_MATCHES) break
+    // Dedupe before the cap, not after: registerFinding() only dedupes once findings
+    // reach the shared context, which is too late here. Without this, N repeats of the
+    // same value (a retried command echoing the same token) would burn the whole cap
+    // on duplicates and starve out a later, different secret in the same scan.
+    if (seen.has(value)) continue
     if (INTEGRITY_HASH_PREFIX_RE.test(value)) continue
     if (!looksHighEntropy(value)) continue
 
+    seen.add(value)
     findings.push({
       ruleId: 'taviraq-bare-high-entropy',
       description: 'Taviraq bare high-entropy value',
       secret: value,
       match: value
     })
+    if (findings.length >= BARE_SECRET_MAX_MATCHES) break
   }
 
   return findings
