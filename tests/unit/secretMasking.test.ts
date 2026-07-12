@@ -170,6 +170,14 @@ describe('secret masking utilities', () => {
     expect(values).toContain(laterDistinctSecret)
   })
 
+  it('does not flag relative paths or versioned filenames as bare secrets', () => {
+    const relativePath = 'dist/bundle-2024-final.js'
+    const archiveFilename = 'node-v20.10.0-darwin-arm64.tar.gz'
+
+    expect(findBareHighEntropySecrets(relativePath)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(archiveFilename)).toHaveLength(0)
+  })
+
   it('finds custom regex secrets using the first capture group', () => {
     const settings = {
       mode: 'on' as const,

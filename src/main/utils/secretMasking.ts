@@ -425,6 +425,17 @@ const INTEGRITY_HASH_PREFIX_RE = /^sha(?:1|256|384|512)-/i
 // is at most the last couple of characters of a secret, so treating "=" as a
 // delimiter only costs those trailing characters, not the secret itself.
 const BARE_ENTROPY_TOKEN_SPLIT_RE = /[^A-Za-z0-9._~+/-]+/
+// isLikelyFilesystemPath() (used inside looksHighEntropy) only rejects absolute paths,
+// so a relative path or a versioned filename -- "dist/bundle-2024-final.js",
+// "node-v20.10.0-darwin-arm64.tar.gz" -- keeps its digit + "-"/"." punctuation and reads
+// as high entropy. Scoped to this bare-entropy fallback only (not looksHighEntropy
+// itself) so keyword-gated call sites keep their existing, already-shipped behavior.
+const COMMON_FILE_EXTENSION_RE =
+  /\.(?:js|jsx|ts|tsx|mjs|cjs|json|md|txt|csv|ya?ml|lock|log|map|css|scss|less|html?|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|zip|tar|gz|tgz|bz2|xz|7z|rar|dmg|exe|app|pkg|deb|rpm|png|jpe?g|gif|svg|ico|pdf|wasm|woff2?|ttf|eot|mp3|mp4|mov|wav)$/i
+
+function looksLikeFilename(value: string): boolean {
+  return COMMON_FILE_EXTENSION_RE.test(value)
+}
 
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   const findings: SecretFinding[] = []
@@ -437,6 +448,7 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
     // on duplicates and starve out a later, different secret in the same scan.
     if (seen.has(value)) continue
     if (INTEGRITY_HASH_PREFIX_RE.test(value)) continue
+    if (looksLikeFilename(value)) continue
     if (!looksHighEntropy(value)) continue
 
     seen.add(value)
