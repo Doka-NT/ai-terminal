@@ -12,7 +12,7 @@ jobs:
   score-diff:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: hsnice16/agent-friendly-action@9b3a096a3f7f3de005216abd14bacfc4d89e8f2a # v0
