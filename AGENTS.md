@@ -62,6 +62,7 @@ Taviraq is a macOS-first Electron desktop terminal with:
 - For privacy/security features, prefer truthful UX over optimistic wording: never show "Protected" or a green enabled state unless the corresponding protection is effectively active at runtime.
 - When a feature has a master toggle plus nested scope toggles, explicitly handle the "enabled, but no active scopes" state with a warning/empty protection state or by restoring safe defaults when the user re-enables it.
 - For Electron layout/UI changes, verify the real Electron runtime when possible. A normal browser/Vite check may miss preload-only APIs, and a built app can still use stale `out/` assets until `npm run build` is run.
+- When changing a renderer default applied through CSS variables, apply the selected value before the first paint (for example, in a layout effect or bootstrap style); a passive effect can visibly flash the old default.
 - After significant privacy/security UI changes, add or update a screenshot smoke test that exercises the key states in the real Electron runtime, saves PNGs under ignored `screenshots/`, and assert-checks the key labels and ARIA state.
 
 ## Data Persistence & Import/Export
