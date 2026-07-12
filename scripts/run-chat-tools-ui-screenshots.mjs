@@ -31,6 +31,22 @@ const activeStepText = [
   'с временными метками и только после этого перейти к следующему шагу плана'
 ].join(' ')
 
+const longInlineToken = 'configuration_segment_'.repeat(24)
+const longCodeLine = `const overflow_probe_${'0123456789abcdef'.repeat(32)} = true`
+const overflowProbe = [
+  'Проверяю восстановленную историю с длинным текстом, URL и встроенным кодом, чтобы содержимое оставалось внутри панели.',
+  'URL: https://example.com/terminal/assistant/layout/with/a/very/long/path/that/must/wrap/inside/the/chat/panel',
+  `Inline code: \`${longInlineToken}\``,
+  '',
+  '| Surface | Long value | Expected behavior |',
+  '| --- | --- | --- |',
+  `| chat | ${'wide-table-cell-'.repeat(18)} | Scroll only inside this table |`,
+  '',
+  '```javascript',
+  longCodeLine,
+  '```'
+].join('\n')
+
 // Seed a session whose assistant turn carries a task list + detailed plan, so
 // the derived checklist panel renders with real content.
 const taskListMessage = [
@@ -51,7 +67,9 @@ const taskListMessage = [
   '2. Выполнить health-check эндпоинта.',
   '3. systemctl restart app.',
   '4. journalctl -u app -n 50 для проверки.',
-  '```'
+  '```',
+  '',
+  overflowProbe
 ].join('\n')
 
 await writeFile(join(userDataDir, 'session-state.json'), JSON.stringify({
@@ -104,6 +122,45 @@ async function captureLocator(locator, name) {
   screenshots.push(path)
 }
 
+async function assertNoOuterHorizontalScroll(chatLog, label) {
+  const metrics = await chatLog.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth
+    const forcedScrollLeft = element.scrollLeft
+    element.scrollLeft = 0
+    return {
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      forcedScrollLeft
+    }
+  })
+
+  assert.ok(
+    metrics.scrollWidth <= metrics.clientWidth + 1,
+    `${label}: chat overflowed horizontally (${metrics.scrollWidth} > ${metrics.clientWidth})`
+  )
+  assert.ok(
+    metrics.forcedScrollLeft <= 1,
+    `${label}: chat accepted horizontal scrollLeft ${metrics.forcedScrollLeft}`
+  )
+}
+
+async function assertLocalHorizontalScroll(locator, label) {
+  const metrics = await locator.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth
+    return {
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      scrollLeft: element.scrollLeft
+    }
+  })
+
+  assert.ok(
+    metrics.scrollWidth > metrics.clientWidth + 1,
+    `${label}: fixture did not overflow locally (${metrics.scrollWidth} <= ${metrics.clientWidth})`
+  )
+  assert.ok(metrics.scrollLeft > 1, `${label}: local horizontal scrolling did not move`)
+}
+
 try {
   const page = await app.firstWindow()
   await page.setViewportSize({ width: 1320, height: 900 })
@@ -145,6 +202,8 @@ try {
   await page.locator('.settings-screen').waitFor({ state: 'hidden' })
   const panel = page.locator('.task-list-panel')
   await panel.waitFor({ state: 'visible' })
+  const chatLog = page.locator('.chat-log')
+  const llmPanel = page.locator('.llm-panel')
   const toggle = panel.locator('.task-list-toggle')
   await toggle.waitFor({ state: 'visible' })
   assert.equal(await toggle.getAttribute('aria-expanded'), 'false')
@@ -162,15 +221,51 @@ try {
   assert.equal(currentStepMetrics.tabIndex, 0)
   // Pending step exists in the DOM but must NOT be visible while collapsed.
   await panel.getByText('Перезапустить сервис').waitFor({ state: 'hidden' })
+  await assertNoOuterHorizontalScroll(chatLog, 'collapsed task list at 420px')
   await captureLocator(panel, '02-task-list-collapsed.png')
-  await captureLocator(page.locator('.llm-panel'), '03-task-list-collapsed-in-chat.png')
+  await captureLocator(llmPanel, '03-task-list-collapsed-in-chat.png')
+  await captureLocator(llmPanel, '05-chat-overflow-collapsed-420.png')
 
   // 4. Expand via the toggle: every step is now laid out and visible.
   await toggle.click()
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true')
   await panel.getByText('Перезапустить сервис').waitFor({ state: 'visible' })
   await panel.getByText('Проверить логи').waitFor({ state: 'visible' })
+  await chatLog.evaluate((element) => { element.scrollTop = 0 })
+  await assertNoOuterHorizontalScroll(chatLog, 'expanded task list at 420px')
   await captureLocator(panel, '04-task-list-expanded.png')
+  await captureLocator(llmPanel, '06-chat-overflow-expanded-420.png')
+
+  // 5. Re-open the restored conversation at the supported minimum sidebar
+  //    width. The outer chat must still stay fixed while deliberately wide
+  //    tables and code blocks retain their own local horizontal scrolling.
+  await page.evaluate(() => {
+    localStorage.setItem('taviraq.sidebarWidth', '300')
+  })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.locator('.app-shell').waitFor({ state: 'visible' })
+  const narrowPanel = page.locator('.llm-panel')
+  const narrowChatLog = page.locator('.chat-log')
+  const narrowTaskList = page.locator('.task-list-panel')
+  await narrowTaskList.waitFor({ state: 'visible' })
+  await narrowChatLog.evaluate((element) => { element.scrollTop = 0 })
+  const narrowPanelWidth = await narrowPanel.evaluate((element) => element.getBoundingClientRect().width)
+  assert.ok(
+    narrowPanelWidth >= 299 && narrowPanelWidth <= 301,
+    `minimum sidebar width was not 300px: ${narrowPanelWidth}`
+  )
+  await assertNoOuterHorizontalScroll(narrowChatLog, 'collapsed task list at 300px')
+  await captureLocator(narrowPanel, '07-chat-overflow-narrow-300.png')
+
+  const codeBlock = page.locator('.msg-code-block').filter({ hasText: 'overflow_probe_' })
+  const codePre = codeBlock.locator('pre')
+  const tableWrap = page.locator('.message-table-wrap').last()
+  await codePre.waitFor({ state: 'visible' })
+  await tableWrap.waitFor({ state: 'visible' })
+  await assertLocalHorizontalScroll(codePre, 'code block')
+  await assertLocalHorizontalScroll(tableWrap, 'table')
+  await assertNoOuterHorizontalScroll(narrowChatLog, 'after local code and table scrolling')
+  await captureLocator(codeBlock, '08-code-block-local-scroll.png')
 
   console.log(`Saved ${screenshots.length} screenshot(s):`)
   for (const path of screenshots) console.log(`  ${path}`)

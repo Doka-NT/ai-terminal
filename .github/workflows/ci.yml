@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsecret-1-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsecret-1-dev xvfb
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -45,3 +45,6 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Chat layout regression
+        run: xvfb-run -a node scripts/run-chat-tools-ui-screenshots.mjs
