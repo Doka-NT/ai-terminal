@@ -178,6 +178,26 @@ describe('secret masking utilities', () => {
     expect(findBareHighEntropySecrets(archiveFilename)).toHaveLength(0)
   })
 
+  it('does not treat an existing secret placeholder body as a new bare secret', () => {
+    const text = 'previous answer used [[TAVIRAQ_SECRET_1_GENERIC_API_KEY]] already'
+
+    expect(findBareHighEntropySecrets(text)).toHaveLength(0)
+  })
+
+  it('does not corrupt a round-tripped placeholder from a previous turn', async () => {
+    const existing = createSecretMaskContext()
+    addSecretFindingsToContext(existing, [
+      { ruleId: 'generic-api-key', secret: 'sk-live-ABCdef1234567890_ABCdef1234567890' }
+    ])
+    const placeholder = existing.bindings[0].placeholder
+    const roundTrippedText = `previous turn already referenced ${placeholder}`
+
+    const next = await createContextFromTexts([roundTrippedText], 'on', undefined, existing)
+
+    expect(next.bindings).toHaveLength(1)
+    expect(maskText(roundTrippedText, next)).toBe(roundTrippedText)
+  })
+
   it('finds custom regex secrets using the first capture group', () => {
     const settings = {
       mode: 'on' as const,

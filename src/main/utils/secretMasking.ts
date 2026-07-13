@@ -440,8 +440,14 @@ function looksLikeFilename(value: string): boolean {
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   const findings: SecretFinding[] = []
   const seen = new Set<string>()
+  // Strip existing [[TAVIRAQ_SECRET_N_KIND]] placeholders before tokenizing: this
+  // split's charset drops "[" and "]", so a placeholder round-tripped back from a prior
+  // turn's conversation history would otherwise expose its bare "TAVIRAQ_SECRET_N_KIND"
+  // body as a fresh "secret" -- re-wrapping the original placeholder into a broken
+  // nested one and breaking resolveSecretPlaceholders() for local command execution.
+  const scanText = text.replace(SECRET_PLACEHOLDER_GLOBAL_RE, ' ')
 
-  for (const value of text.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
+  for (const value of scanText.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
     // Dedupe before the cap, not after: registerFinding() only dedupes once findings
     // reach the shared context, which is too late here. Without this, N repeats of the
     // same value (a retried command echoing the same token) would burn the whole cap
