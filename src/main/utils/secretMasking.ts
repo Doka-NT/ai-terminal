@@ -392,14 +392,20 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
   }
 
   // The prefix ("4/" or "1//") is a strong signal on its own, but the body still needs a
-  // sanity check: an ordinary hyphenated path segment like "docs/4/migration-guide-for-
-  // authorization" also matches "20+ letters/digits/_/-" and would otherwise be flagged.
-  // A real Google-issued body is a long random base64url-ish string over a 64-symbol
-  // alphabet, so it is overwhelmingly likely to contain a digit or an uppercase letter
-  // somewhere; a hand-written slug of lowercase words normally has neither.
-  const oauthAuthorizationCodeRe = /\b4\/([0-9A-Za-z_-]{20,})\b/g
+  // sanity check: an ordinary hyphenated path segment (e.g. "docs/4/migration-guide-v2-
+  // authorization" or "docs/1//OAuth-migration-guide") also matches a run of letters,
+  // digits, "_", or "-", and a presence-of-digit-or-uppercase check (an earlier version
+  // of this guard) still passes it whenever the slug happens to contain a version number
+  // or one capitalized word. Digit/case presence isn't a reliable signal either way at
+  // short lengths -- what actually separates a real, long random base64url-ish body from
+  // a human-written slug is per-character Shannon entropy, and that measure is only
+  // statistically reliable with enough characters to average over. So this requires a
+  // longer minimum body (30, vs. the 20 used elsewhere) -- still far short of a real
+  // Google-issued code's typical length -- and rejects bodies below a bits-per-char floor
+  // empirically well below random base64url-ish text and above realistic doc slugs.
+  const oauthAuthorizationCodeRe = /\b4\/([0-9A-Za-z_-]{30,})\b/g
   for (const match of text.matchAll(oauthAuthorizationCodeRe)) {
-    if (looksLikeWordSlug(match[1])) continue
+    if (!looksLikeRandomOAuthBody(match[1])) continue
     findings.push({
       ruleId: 'taviraq-google-oauth-code',
       description: 'Google OAuth authorization code',
@@ -408,9 +414,9 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
     })
   }
 
-  const oauthRefreshTokenRe = /\b1\/\/([0-9A-Za-z_-]{20,})\b/g
+  const oauthRefreshTokenRe = /\b1\/\/([0-9A-Za-z_-]{30,})\b/g
   for (const match of text.matchAll(oauthRefreshTokenRe)) {
-    if (looksLikeWordSlug(match[1])) continue
+    if (!looksLikeRandomOAuthBody(match[1])) continue
     findings.push({
       ruleId: 'taviraq-google-oauth-refresh-token',
       description: 'Google OAuth refresh token',
@@ -422,8 +428,28 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
   return findings
 }
 
-function looksLikeWordSlug(value: string): boolean {
-  return !/[0-9]/.test(value) && !/[A-Z]/.test(value)
+// Empirically calibrated: realistic doc slugs (including ones with a version number or a
+// capitalized word, e.g. "migration-guide-v2-authorization") measure ~3.7-4.05 bits/char
+// at 30+ chars; random base64url-ish text of the same length measures ~4.25-4.85 even in
+// the least favorable (punctuation-free) case. 4.15 sits in the gap with margin both ways.
+const OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR = 4.15
+
+function looksLikeRandomOAuthBody(value: string): boolean {
+  return shannonEntropyBitsPerChar(value) >= OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR
+}
+
+function shannonEntropyBitsPerChar(value: string): number {
+  if (!value.length) return 0
+
+  const counts = new Map<string, number>()
+  for (const char of value) counts.set(char, (counts.get(char) ?? 0) + 1)
+
+  let entropy = 0
+  for (const count of counts.values()) {
+    const probability = count / value.length
+    entropy -= probability * Math.log2(probability)
+  }
+  return entropy
 }
 
 const INTEGRITY_HASH_PREFIX_RE = /^sha(?:1|256|384|512)-/i

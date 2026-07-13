@@ -101,7 +101,7 @@ describe('secret masking utilities', () => {
   })
 
   it('finds a bare Google OAuth authorization code with no surrounding keyword', () => {
-    const code = '4/0AXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+    const code = '4/0AVGzR9k1pXY7cLmN3wQaT5oZbEuHsFj2dRkPq8xnLiC4tM'
     const findings = findSupplementalStrictSecrets(`pasted by accident: ${code}`)
 
     expect(findings).toEqual([{
@@ -113,7 +113,7 @@ describe('secret masking utilities', () => {
   })
 
   it('finds a bare Google OAuth refresh token with no surrounding keyword', () => {
-    const token = '1//0gXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+    const token = '1//0gWq3Zt8mYcLd5RxNjVb2FsHk7uPaT9oXi4nQyG1cMrE6zW'
     const findings = findSupplementalStrictSecrets(`pasted by accident: ${token}`)
 
     expect(findings).toEqual([{
@@ -130,6 +130,17 @@ describe('secret masking utilities', () => {
 
     expect(findSupplementalStrictSecrets(authText)).toHaveLength(0)
     expect(findSupplementalStrictSecrets(refreshText)).toHaveLength(0)
+  })
+
+  it('does not flag a versioned or capitalized path segment either', () => {
+    // A digit (version number) or one capitalized word is not, on its own, proof a
+    // slug is actually a random secret body -- this is what tripped up an earlier,
+    // simpler version of this guard that only checked for digit/uppercase presence.
+    const versionedSlug = 'see docs/4/migration-guide-v2-authorization for details'
+    const capitalizedSlug = 'see docs/1//OAuth-migration-guide-for-enterprise-teams for details'
+
+    expect(findSupplementalStrictSecrets(versionedSlug)).toHaveLength(0)
+    expect(findSupplementalStrictSecrets(capitalizedSlug)).toHaveLength(0)
   })
 
   it('finds a bare high-entropy token with no keyword or provider prefix', () => {
@@ -465,7 +476,7 @@ describe('secret masking utilities', () => {
 
   it('masks a bare-pasted terminal secret in the outgoing provider request (issue #211)', async () => {
     const bareToken = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
-    const oauthCode = '4/0AXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+    const oauthCode = '4/0AVGzR9k1pXY7cLmN3wQaT5oZbEuHsFj2dRkPq8xnLiC4tM'
 
     const { request, context } = await maskChatStreamRequest({
       requestId: 'req-1',
