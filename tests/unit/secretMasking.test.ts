@@ -192,9 +192,17 @@ describe('secret masking utilities', () => {
   it('does not flag relative paths or versioned filenames as bare secrets', () => {
     const relativePath = 'dist/bundle-2024-final.js'
     const archiveFilename = 'node-v20.10.0-darwin-arm64.tar.gz'
+    const extensionlessRoute = 'docs/4/migration-guide-v2-authorization'
 
     expect(findBareHighEntropySecrets(relativePath)).toHaveLength(0)
     expect(findBareHighEntropySecrets(archiveFilename)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(extensionlessRoute)).toHaveLength(0)
+  })
+
+  it('still finds a genuinely random slash-bearing bare secret', () => {
+    const token = 'aB3xQ9/kL7mZ_pR2/vT8nW1cY4dF6gH5j'
+
+    expect(findBareHighEntropySecrets(token).map((finding) => finding.secret)).toEqual([token])
   })
 
   it('does not treat an existing secret placeholder body as a new bare secret', () => {
@@ -496,5 +504,23 @@ describe('secret masking utilities', () => {
     expect(context.bindings.map((binding) => binding.kind)).toEqual(
       expect.arrayContaining(['BARE_HIGH_ENTROPY', 'GOOGLE_OAUTH_CODE'])
     )
+  })
+
+  it('preserves an extensionless relative route while masking a neighboring bare secret', async () => {
+    const route = 'docs/4/migration-guide-v2-authorization'
+    const bareToken = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
+
+    const { request } = await maskChatStreamRequest({
+      requestId: 'req-1',
+      provider: { name: 'test-provider', baseUrl: 'https://example.test', apiKeyRef: 'test-key' },
+      messages: [{ role: 'user', content: 'what does this terminal output mean?' }],
+      context: {
+        selectedText: '',
+        terminalOutput: `open ${route} with token ${bareToken}`
+      }
+    }, 'on')
+
+    expect(request.context.terminalOutput).toContain(route)
+    expect(request.context.terminalOutput).not.toContain(bareToken)
   })
 })

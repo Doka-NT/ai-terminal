@@ -475,6 +475,18 @@ function looksLikeFilename(value: string): boolean {
   return COMMON_FILE_EXTENSION_RE.test(value)
 }
 
+function looksLikeExtensionlessRelativePath(value: string): boolean {
+  if (!value.includes('/') || isLikelyFilesystemPath(value)) return false
+
+  const segments = value.split('/')
+  if (segments.some((segment) => !segment || !/^[A-Za-z0-9._-]+$/.test(segment))) return false
+
+  // Human-readable routes can satisfy looksHighEntropy() through digits and path
+  // punctuation alone. Keep genuinely random slash-bearing tokens eligible by only
+  // rejecting path-shaped values below the same entropy floor used for OAuth slugs.
+  return shannonEntropyBitsPerChar(value) < OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR
+}
+
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   const findings: SecretFinding[] = []
   const seen = new Set<string>()
@@ -493,6 +505,7 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
     if (seen.has(value)) continue
     if (INTEGRITY_HASH_PREFIX_RE.test(value)) continue
     if (looksLikeFilename(value)) continue
+    if (looksLikeExtensionlessRelativePath(value)) continue
     if (!looksHighEntropy(value)) continue
 
     seen.add(value)
