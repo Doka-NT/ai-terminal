@@ -391,8 +391,15 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
     }
   }
 
-  const oauthAuthorizationCodeRe = /\b4\/[0-9A-Za-z_-]{20,}\b/g
+  // The prefix ("4/" or "1//") is a strong signal on its own, but the body still needs a
+  // sanity check: an ordinary hyphenated path segment like "docs/4/migration-guide-for-
+  // authorization" also matches "20+ letters/digits/_/-" and would otherwise be flagged.
+  // A real Google-issued body is a long random base64url-ish string over a 64-symbol
+  // alphabet, so it is overwhelmingly likely to contain a digit or an uppercase letter
+  // somewhere; a hand-written slug of lowercase words normally has neither.
+  const oauthAuthorizationCodeRe = /\b4\/([0-9A-Za-z_-]{20,})\b/g
   for (const match of text.matchAll(oauthAuthorizationCodeRe)) {
+    if (looksLikeWordSlug(match[1])) continue
     findings.push({
       ruleId: 'taviraq-google-oauth-code',
       description: 'Google OAuth authorization code',
@@ -401,8 +408,9 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
     })
   }
 
-  const oauthRefreshTokenRe = /\b1\/\/[0-9A-Za-z_-]{20,}\b/g
+  const oauthRefreshTokenRe = /\b1\/\/([0-9A-Za-z_-]{20,})\b/g
   for (const match of text.matchAll(oauthRefreshTokenRe)) {
+    if (looksLikeWordSlug(match[1])) continue
     findings.push({
       ruleId: 'taviraq-google-oauth-refresh-token',
       description: 'Google OAuth refresh token',
@@ -412,6 +420,10 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
   }
 
   return findings
+}
+
+function looksLikeWordSlug(value: string): boolean {
+  return !/[0-9]/.test(value) && !/[A-Z]/.test(value)
 }
 
 const INTEGRITY_HASH_PREFIX_RE = /^sha(?:1|256|384|512)-/i

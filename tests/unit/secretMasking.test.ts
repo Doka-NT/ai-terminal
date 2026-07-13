@@ -124,6 +124,14 @@ describe('secret masking utilities', () => {
     }])
   })
 
+  it('does not flag an ordinary path segment as a Google OAuth code or refresh token', () => {
+    const authText = 'see docs/4/migration-guide-for-authorization for details'
+    const refreshText = 'see docs/1//migration-guide-for-authorization for details'
+
+    expect(findSupplementalStrictSecrets(authText)).toHaveLength(0)
+    expect(findSupplementalStrictSecrets(refreshText)).toHaveLength(0)
+  })
+
   it('finds a bare high-entropy token with no keyword or provider prefix', () => {
     const token = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
     const findings = findBareHighEntropySecrets(`pasted by accident: ${token}`)
