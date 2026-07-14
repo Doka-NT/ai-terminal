@@ -462,14 +462,24 @@ const INTEGRITY_HASH_PREFIX_RE = /^sha(?:1|256|384|512)-/i
 // (e.g. "API_KEY=abc..." masked whole instead of just "abc..."). Real base64 padding
 // is at most the last couple of characters of a secret, so treating "=" as a
 // delimiter only costs those trailing characters, not the secret itself.
-const BARE_ENTROPY_TOKEN_SPLIT_RE = /[^A-Za-z0-9._~+/-]+/
+// "!", "#", "$", "%" ARE kept: a bare-pasted password using typical complexity-rule
+// special characters (e.g. "XyZ9!aBcD3#eFgH4$jKlM5%nOpQ6") would otherwise be shattered
+// into short fragments at each of those characters, none reaching the length floor
+// below -- so the real secret would never even reach the entropy check. Unlike "=",
+// none of these four commonly delimit two distinct semantic units in ordinary text.
+const BARE_ENTROPY_TOKEN_SPLIT_RE = /[^A-Za-z0-9._~+/!#$%-]+/
 // isLikelyFilesystemPath() (used inside looksHighEntropy) only rejects absolute paths,
 // so a relative path or a versioned filename -- "dist/bundle-2024-final.js",
 // "node-v20.10.0-darwin-arm64.tar.gz" -- keeps its digit + "-"/"." punctuation and reads
 // as high entropy. Scoped to this bare-entropy fallback only (not looksHighEntropy
 // itself) so keyword-gated call sites keep their existing, already-shipped behavior.
+// Includes common PKI/certificate & key-material extensions (pem, key, crt, cer, p12,
+// pfx, csr, der): a filename like "service-account-production-2024.pem" would otherwise
+// mix digits with "-"/"." punctuation and pass looksHighEntropy(), masking the exact
+// filename a user is asking about even though the file's actual contents are what
+// matters, not its name.
 const COMMON_FILE_EXTENSION_RE =
-  /\.(?:js|jsx|ts|tsx|mjs|cjs|json|md|txt|csv|ya?ml|lock|log|map|css|scss|less|html?|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|zip|tar|gz|tgz|bz2|xz|7z|rar|dmg|exe|app|pkg|deb|rpm|png|jpe?g|gif|svg|ico|pdf|wasm|woff2?|ttf|eot|mp3|mp4|mov|wav)$/i
+  /\.(?:js|jsx|ts|tsx|mjs|cjs|json|md|txt|csv|ya?ml|lock|log|map|css|scss|less|html?|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|zip|tar|gz|tgz|bz2|xz|7z|rar|dmg|exe|app|pkg|deb|rpm|png|jpe?g|gif|svg|ico|pdf|wasm|woff2?|ttf|eot|mp3|mp4|mov|wav|pem|key|crt|cer|p12|pfx|csr|der)$/i
 
 function looksLikeFilename(value: string): boolean {
   return COMMON_FILE_EXTENSION_RE.test(value)

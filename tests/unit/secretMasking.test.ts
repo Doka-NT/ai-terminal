@@ -213,6 +213,27 @@ describe('secret masking utilities', () => {
     expect(findBareHighEntropySecrets(platformTriple)).toHaveLength(0)
   })
 
+  it('finds a bare password using typical special-character complexity rules', () => {
+    const password = 'XyZ9!aBcD3#eFgH4$jKlM5%nOpQ6'
+
+    expect(findBareHighEntropySecrets(password)).toEqual([{
+      ruleId: 'taviraq-bare-high-entropy',
+      description: 'Taviraq bare high-entropy value',
+      secret: password,
+      match: password
+    }])
+  })
+
+  it('does not flag common certificate/key filenames as bare secrets', () => {
+    const pemFile = 'service-account-production-2024.pem'
+    const keyFile = 'server-private-2024-01.key'
+    const crtFile = 'wildcard-example-2024.crt'
+
+    expect(findBareHighEntropySecrets(pemFile)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(keyFile)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(crtFile)).toHaveLength(0)
+  })
+
   it('does not treat an existing secret placeholder body as a new bare secret', () => {
     const text = 'previous answer used [[TAVIRAQ_SECRET_1_GENERIC_API_KEY]] already'
 
