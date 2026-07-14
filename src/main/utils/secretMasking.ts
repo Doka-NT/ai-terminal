@@ -512,6 +512,22 @@ function looksLikeVersionedArtifactName(value: string): boolean {
   return VERSION_NUMBER_RE.test(value)
 }
 
+// ssh-keygen prints public host-key fingerprints as "SHA256:<base64 body>" (colon, not
+// the hyphen INTEGRITY_HASH_PREFIX_RE expects). Since ":" is a hard delimiter for this
+// tokenizer, the prefix and body would otherwise land in separate tokens and the body
+// alone can read as a bare high-entropy value -- but a host-key fingerprint is public
+// verification data, not a secret, and masking it would hide what the user needs to
+// verify the connection. Strip these spans before tokenizing, same approach as
+// placeholder-stripping above.
+const SSH_FINGERPRINT_RE = /\bSHA(?:1|256):[A-Za-z0-9+/=]{20,}\b/gi
+
+// A bare secret followed immediately by sentence punctuation ("...token: aB3x...j.")
+// would otherwise bind that punctuation as part of the secret's own value, since "."
+// is kept in the charset above for JWTs and similar. Only strip it from the very end of
+// a candidate (not internally), so a JWT's "header.payload.signature" dots -- which are
+// never the last character of a real token -- are left alone.
+const TRAILING_SENTENCE_PUNCTUATION_RE = /[.!?]+$/
+
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   const findings: SecretFinding[] = []
   const seen = new Set<string>()
@@ -520,9 +536,12 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   // turn's conversation history would otherwise expose its bare "TAVIRAQ_SECRET_N_KIND"
   // body as a fresh "secret" -- re-wrapping the original placeholder into a broken
   // nested one and breaking resolveSecretPlaceholders() for local command execution.
-  const scanText = text.replace(SECRET_PLACEHOLDER_GLOBAL_RE, ' ')
+  const scanText = text
+    .replace(SECRET_PLACEHOLDER_GLOBAL_RE, ' ')
+    .replace(SSH_FINGERPRINT_RE, ' ')
 
-  for (const value of scanText.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
+  for (const rawValue of scanText.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
+    const value = rawValue.replace(TRAILING_SENTENCE_PUNCTUATION_RE, '')
     // Dedupe before the cap, not after: registerFinding() only dedupes once findings
     // reach the shared context, which is too late here. Without this, N repeats of the
     // same value (a retried command echoing the same token) would burn the whole cap

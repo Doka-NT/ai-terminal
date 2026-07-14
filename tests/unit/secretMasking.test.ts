@@ -234,6 +234,26 @@ describe('secret masking utilities', () => {
     expect(findBareHighEntropySecrets(crtFile)).toHaveLength(0)
   })
 
+  it('does not flag a public SSH host-key fingerprint as a bare secret', () => {
+    const line = 'ED25519 key fingerprint is SHA256:qP8xN2vK9mZ7cL4wR6tY1bF3jH5sD0aG8eU2xC9k'
+
+    expect(findBareHighEntropySecrets(line)).toHaveLength(0)
+  })
+
+  it('strips trailing sentence punctuation from a bare secret before binding it', () => {
+    const token = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
+    const sentence = `use ${token}.`
+
+    const findings = findBareHighEntropySecrets(sentence)
+
+    expect(findings).toEqual([{
+      ruleId: 'taviraq-bare-high-entropy',
+      description: 'Taviraq bare high-entropy value',
+      secret: token,
+      match: token
+    }])
+  })
+
   it('does not treat an existing secret placeholder body as a new bare secret', () => {
     const text = 'previous answer used [[TAVIRAQ_SECRET_1_GENERIC_API_KEY]] already'
 
