@@ -488,8 +488,12 @@ function looksLikeFilename(value: string): boolean {
 function looksLikeExtensionlessRelativePath(value: string): boolean {
   if (!value.includes('/') || isLikelyFilesystemPath(value)) return false
 
-  const segments = value.split('/')
-  if (segments.some((segment) => !segment || !/^[A-Za-z0-9._-]+$/.test(segment))) return false
+  // filter(Boolean) drops empty segments from a doubled separator (e.g. the "//" in
+  // "docs/1//migration-guide"): a route with a double slash is still a route, not a
+  // reason to fall through to looksHighEntropy() below.
+  const segments = value.split('/').filter(Boolean)
+  if (segments.length === 0) return false
+  if (segments.some((segment) => !/^[A-Za-z0-9._-]+$/.test(segment))) return false
 
   // Human-readable routes can satisfy looksHighEntropy() through digits and path
   // punctuation alone. Keep genuinely random slash-bearing tokens eligible by only
@@ -512,6 +516,28 @@ function looksLikeVersionedArtifactName(value: string): boolean {
   return VERSION_NUMBER_RE.test(value)
 }
 
+// A DNS hostname (internal EC2/RDS-style names included) has no recognized file
+// extension and no path separator, so it skips every guard above; looksHighEntropy()
+// then accepts it for mixing digits with "."/"-" punctuation. Entropy alone does not
+// reliably reject these: a hostname can legitimately contain a randomly-generated cloud
+// resource-id label (e.g. an RDS instance identifier), which measures high enough to sit
+// above the same threshold used for OAuth bodies. What is reliable is DNS label syntax
+// itself: each dot-separated label must be short (real hostname labels are practically
+// always well under this) and match RFC 1035 label shape (alphanumeric, interior hyphens
+// only). A JWT's dot-separated segments are long base64url blobs and fail the length
+// check, so this does not suppress JWT-shaped bare secrets.
+const HOSTNAME_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
+const MAX_HOSTNAME_LABEL_LENGTH = 30
+
+function looksLikeHostname(value: string): boolean {
+  if (!value.includes('.')) return false
+
+  const labels = value.split('.')
+  if (labels.length < 2) return false
+
+  return labels.every((label) => label.length > 0 && label.length <= MAX_HOSTNAME_LABEL_LENGTH && HOSTNAME_LABEL_RE.test(label))
+}
+
 // ssh-keygen prints public host-key fingerprints as "SHA256:<base64 body>" (colon, not
 // the hyphen INTEGRITY_HASH_PREFIX_RE expects). Since ":" is a hard delimiter for this
 // tokenizer, the prefix and body would otherwise land in separate tokens and the body
@@ -526,6 +552,18 @@ const SSH_FINGERPRINT_RE = /\bSHA(?:1|256):[A-Za-z0-9+/=]{20,}\b/gi
 // is kept in the charset above for JWTs and similar. Only strip it from the very end of
 // a candidate (not internally), so a JWT's "header.payload.signature" dots -- which are
 // never the last character of a real token -- are left alone.
+//
+// Trailing "." /"!"/"?" is genuinely ambiguous, though: it could be sentence punctuation,
+// or it could be the real last character of a secret (e.g. a generated password ending
+// in "!" -- "!" is deliberately in the charset above for exactly this case). Guessing
+// wrong in either direction has a cost, but they are not equally bad: if the untrimmed
+// form is never registered, a secret that truly ends in this punctuation gets a *shorter*
+// binding than its real value -- maskText() then leaves that last character sitting
+// unmasked right next to the placeholder, an actual leak into the provider payload/
+// display. So both forms are registered below whenever they differ. maskText() tries
+// longer bindings first, so whichever form actually occurs in the text is matched and
+// masked in full; the untrimmed form otherwise simply never appears in later text and
+// contributes no false match.
 const TRAILING_SENTENCE_PUNCTUATION_RE = /[.!?]+$/
 
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
@@ -541,6 +579,8 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
     .replace(SSH_FINGERPRINT_RE, ' ')
 
   for (const rawValue of scanText.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
+    if (findings.length >= BARE_SECRET_MAX_MATCHES) break
+
     const value = rawValue.replace(TRAILING_SENTENCE_PUNCTUATION_RE, '')
     // Dedupe before the cap, not after: registerFinding() only dedupes once findings
     // reach the shared context, which is too late here. Without this, N repeats of the
@@ -551,6 +591,7 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
     if (looksLikeFilename(value)) continue
     if (looksLikeExtensionlessRelativePath(value)) continue
     if (looksLikeVersionedArtifactName(value)) continue
+    if (looksLikeHostname(value)) continue
     if (!looksHighEntropy(value)) continue
 
     seen.add(value)
@@ -560,7 +601,16 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
       secret: value,
       match: value
     })
-    if (findings.length >= BARE_SECRET_MAX_MATCHES) break
+
+    if (rawValue !== value && !seen.has(rawValue) && findings.length < BARE_SECRET_MAX_MATCHES) {
+      seen.add(rawValue)
+      findings.push({
+        ruleId: 'taviraq-bare-high-entropy',
+        description: 'Taviraq bare high-entropy value',
+        secret: rawValue,
+        match: rawValue
+      })
+    }
   }
 
   return findings

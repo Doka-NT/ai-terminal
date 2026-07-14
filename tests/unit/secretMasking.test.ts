@@ -240,18 +240,52 @@ describe('secret masking utilities', () => {
     expect(findBareHighEntropySecrets(line)).toHaveLength(0)
   })
 
-  it('strips trailing sentence punctuation from a bare secret before binding it', () => {
+  it('registers both the trimmed and untrimmed forms of a bare secret with trailing punctuation', () => {
+    // Registering only the trimmed form would leave a secret that genuinely ends in
+    // "."/"!"/"?" only partially masked -- see the maskChatStreamRequest test below for
+    // the actual no-leak assertion. maskText() tries longer bindings first, so whichever
+    // form actually occurs in a given text is matched and masked in full either way.
     const token = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
     const sentence = `use ${token}.`
 
     const findings = findBareHighEntropySecrets(sentence)
 
-    expect(findings).toEqual([{
-      ruleId: 'taviraq-bare-high-entropy',
-      description: 'Taviraq bare high-entropy value',
-      secret: token,
-      match: token
-    }])
+    expect(findings.map((finding) => finding.secret)).toEqual(
+      expect.arrayContaining([token, `${token}.`])
+    )
+    expect(findings).toHaveLength(2)
+  })
+
+  it('fully masks a secret that genuinely ends in kept punctuation, with no trailing leak', async () => {
+    const realPassword = 'XyZ9!aBcD3#eFgH4$jKlM5%nOpQ6!'
+
+    const { request } = await maskChatStreamRequest({
+      requestId: 'req-1',
+      provider: { name: 'test-provider', baseUrl: 'https://example.test', apiKeyRef: 'test-key' },
+      messages: [{ role: 'user', content: 'what does this mean?' }],
+      context: {
+        selectedText: '',
+        terminalOutput: `generated password: ${realPassword}`
+      }
+    }, 'on')
+
+    expect(request.context.terminalOutput).not.toContain(realPassword)
+    // Not even the trailing "!" should survive unmasked next to the placeholder.
+    expect(request.context.terminalOutput).not.toMatch(/\]\]!/)
+  })
+
+  it('does not flag a public DNS hostname (including one with a random-looking resource-id label) as a bare secret', () => {
+    const internalHostname = 'ip-10-0-1-23.us-west-2.compute.internal'
+    const rdsEndpoint = 'mydb-instance.c9akciq32.us-east-1.rds.amazonaws.com'
+
+    expect(findBareHighEntropySecrets(internalHostname)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(rdsEndpoint)).toHaveLength(0)
+  })
+
+  it('does not flag an extensionless relative route containing a double slash', () => {
+    const route = 'docs/1//migration-guide-for-authorization'
+
+    expect(findBareHighEntropySecrets(route)).toHaveLength(0)
   })
 
   it('does not treat an existing secret placeholder body as a new bare secret', () => {
