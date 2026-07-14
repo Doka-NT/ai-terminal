@@ -553,18 +553,20 @@ const SSH_FINGERPRINT_RE = /\bSHA(?:1|256):[A-Za-z0-9+/=]{20,}\b/gi
 // a candidate (not internally), so a JWT's "header.payload.signature" dots -- which are
 // never the last character of a real token -- are left alone.
 //
-// Trailing "." /"!"/"?" is genuinely ambiguous, though: it could be sentence punctuation,
-// or it could be the real last character of a secret (e.g. a generated password ending
-// in "!" -- "!" is deliberately in the charset above for exactly this case). Guessing
-// wrong in either direction has a cost, but they are not equally bad: if the untrimmed
-// form is never registered, a secret that truly ends in this punctuation gets a *shorter*
-// binding than its real value -- maskText() then leaves that last character sitting
-// unmasked right next to the placeholder, an actual leak into the provider payload/
-// display. So both forms are registered below whenever they differ. maskText() tries
-// longer bindings first, so whichever form actually occurs in the text is matched and
-// masked in full; the untrimmed form otherwise simply never appears in later text and
-// contributes no false match.
+// Trailing "."/"!"/"?" is genuinely ambiguous: it could be sentence punctuation, or it
+// could be the real last character of a secret. But the two are NOT equally likely.
+// "!" is a standard password-complexity special character (deliberately in the charset
+// above for that reason) and plausibly IS the real last character. "." and "?" are
+// essentially never a deliberate final character of a real secret -- passwords rarely
+// end a complexity requirement with them, and tokens/JWTs never do. So: always strip for
+// binding purposes (below), but only additionally register the untrimmed form when the
+// stripped run is exclusively "!" -- preserving that form is what prevents a password
+// genuinely ending in "!" from leaking its last character next to the placeholder (see
+// the maskChatStreamRequest test below), while NOT doing so for "."/"?" is what keeps the
+// far more common "secret sitting in a sentence" case resolving to the correct value
+// instead of the sentence's trailing punctuation glued onto it.
 const TRAILING_SENTENCE_PUNCTUATION_RE = /[.!?]+$/
+const AMBIGUOUS_TRAILING_PUNCTUATION_RE = /^!+$/
 
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   const findings: SecretFinding[] = []
@@ -603,13 +605,16 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
     })
 
     if (rawValue !== value && !seen.has(rawValue) && findings.length < BARE_SECRET_MAX_MATCHES) {
-      seen.add(rawValue)
-      findings.push({
-        ruleId: 'taviraq-bare-high-entropy',
-        description: 'Taviraq bare high-entropy value',
-        secret: rawValue,
-        match: rawValue
-      })
+      const strippedSuffix = rawValue.slice(value.length)
+      if (AMBIGUOUS_TRAILING_PUNCTUATION_RE.test(strippedSuffix)) {
+        seen.add(rawValue)
+        findings.push({
+          ruleId: 'taviraq-bare-high-entropy',
+          description: 'Taviraq bare high-entropy value',
+          secret: rawValue,
+          match: rawValue
+        })
+      }
     }
   }
 

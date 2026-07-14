@@ -240,18 +240,34 @@ describe('secret masking utilities', () => {
     expect(findBareHighEntropySecrets(line)).toHaveLength(0)
   })
 
-  it('registers both the trimmed and untrimmed forms of a bare secret with trailing punctuation', () => {
-    // Registering only the trimmed form would leave a secret that genuinely ends in
-    // "."/"!"/"?" only partially masked -- see the maskChatStreamRequest test below for
-    // the actual no-leak assertion. maskText() tries longer bindings first, so whichever
-    // form actually occurs in a given text is matched and masked in full either way.
+  it('binds only the trimmed form when a bare secret is followed by sentence-ending punctuation', () => {
+    // "." (and "?") are essentially never a deliberate final character of a real secret,
+    // so the far more common "secret sitting in a sentence" case should resolve to the
+    // secret alone, not the secret plus the sentence's trailing period.
     const token = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
     const sentence = `use ${token}.`
 
     const findings = findBareHighEntropySecrets(sentence)
 
+    expect(findings).toEqual([{
+      ruleId: 'taviraq-bare-high-entropy',
+      description: 'Taviraq bare high-entropy value',
+      secret: token,
+      match: token
+    }])
+  })
+
+  it('registers both the trimmed and untrimmed forms only for trailing "!"', () => {
+    // Unlike "." / "?", "!" is a standard password-complexity special character and
+    // plausibly IS the real last character of a secret, so both forms are kept -- see
+    // the maskChatStreamRequest test below for the actual no-leak assertion.
+    const token = 'aB3xQ9-kL7mZ_pR2vT8nW1cY4dF6gH5j'
+    const sentence = `use ${token}!`
+
+    const findings = findBareHighEntropySecrets(sentence)
+
     expect(findings.map((finding) => finding.secret)).toEqual(
-      expect.arrayContaining([token, `${token}.`])
+      expect.arrayContaining([token, `${token}!`])
     )
     expect(findings).toHaveLength(2)
   })
