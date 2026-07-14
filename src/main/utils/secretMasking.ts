@@ -487,6 +487,21 @@ function looksLikeExtensionlessRelativePath(value: string): boolean {
   return shannonEntropyBitsPerChar(value) < OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR
 }
 
+// Extensionless, slash-free versioned artifact/platform names -- "node-v20.10.0-darwin-
+// arm64", "x86_64-apple-darwin23.4.0" -- pass both looksLikeFilename() (no extension) and
+// isLikelyFilesystemPath() (no leading separator), and looksHighEntropy() accepts them
+// because they mix digits with "-"/"." punctuation. A Shannon-entropy threshold doesn't
+// reliably separate these from a real short secret either: at this length the two
+// populations are only ~0.05 bits/char apart, well within normal sampling noise. What
+// does reliably separate them is structure: a real secret is essentially never going to
+// contain a dotted run of 1-4 digit groups that reads as a version number, since that is
+// a very specific, low-probability shape for genuinely random text to produce by chance.
+const VERSION_NUMBER_RE = /\b\d{1,4}(?:\.\d{1,4}){1,3}\b/
+
+function looksLikeVersionedArtifactName(value: string): boolean {
+  return VERSION_NUMBER_RE.test(value)
+}
+
 export function findBareHighEntropySecrets(text: string): SecretFinding[] {
   const findings: SecretFinding[] = []
   const seen = new Set<string>()
@@ -506,6 +521,7 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
     if (INTEGRITY_HASH_PREFIX_RE.test(value)) continue
     if (looksLikeFilename(value)) continue
     if (looksLikeExtensionlessRelativePath(value)) continue
+    if (looksLikeVersionedArtifactName(value)) continue
     if (!looksHighEntropy(value)) continue
 
     seen.add(value)

@@ -205,6 +205,14 @@ describe('secret masking utilities', () => {
     expect(findBareHighEntropySecrets(token).map((finding) => finding.secret)).toEqual([token])
   })
 
+  it('does not flag extensionless versioned platform/artifact names as bare secrets', () => {
+    const nodeArtifact = 'node-v20.10.0-darwin-arm64'
+    const platformTriple = 'x86_64-apple-darwin23.4.0'
+
+    expect(findBareHighEntropySecrets(nodeArtifact)).toHaveLength(0)
+    expect(findBareHighEntropySecrets(platformTriple)).toHaveLength(0)
+  })
+
   it('does not treat an existing secret placeholder body as a new bare secret', () => {
     const text = 'previous answer used [[TAVIRAQ_SECRET_1_GENERIC_API_KEY]] already'
 
