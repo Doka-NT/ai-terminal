@@ -538,6 +538,28 @@ function looksLikeHostname(value: string): boolean {
   return labels.every((label) => label.length > 0 && label.length <= MAX_HOSTNAME_LABEL_LENGTH && HOSTNAME_LABEL_RE.test(label))
 }
 
+// A slash-free, dot-free hyphenated slug ("migration-guide-v2-authorization") passes
+// every guard above and only has hyphen/digit punctuation for looksHighEntropy() to key
+// off. Reusing the same threshold validated for OAuth bodies requires the same 30-char
+// floor for the estimate to be meaningful; below that, entropy alone doesn't reliably
+// separate a slug from a real short secret (see looksLikeKubernetesResourceName below for
+// the shorter, structurally-distinct case this doesn't cover).
+function looksLikeLowEntropySlug(value: string): boolean {
+  return value.length >= 30 && shannonEntropyBitsPerChar(value) < OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR
+}
+
+// Kubernetes generates pod names as "<deployment>-<replicaset-hash>-<pod-hash>", where
+// the hashes are near-random-looking lowercase alphanumeric runs of a fixed length --
+// exactly the shape that pushes Shannon entropy up close to (sometimes above) a real
+// secret's range, unlike the documentation-slug case above. What's still reliable is the
+// fixed suffix shape itself: a 9-10 char run, then a 5 char run, both lowercase
+// alphanumeric.
+const KUBERNETES_RESOURCE_SUFFIX_RE = /-[a-z0-9]{9,10}-[a-z0-9]{5}$/
+
+function looksLikeKubernetesResourceName(value: string): boolean {
+  return KUBERNETES_RESOURCE_SUFFIX_RE.test(value)
+}
+
 // ssh-keygen prints public host-key fingerprints as "SHA256:<base64 body>" (colon, not
 // the hyphen INTEGRITY_HASH_PREFIX_RE expects). Since ":" is a hard delimiter for this
 // tokenizer, the prefix and body would otherwise land in separate tokens and the body
@@ -594,6 +616,8 @@ export function findBareHighEntropySecrets(text: string): SecretFinding[] {
     if (looksLikeExtensionlessRelativePath(value)) continue
     if (looksLikeVersionedArtifactName(value)) continue
     if (looksLikeHostname(value)) continue
+    if (looksLikeLowEntropySlug(value)) continue
+    if (looksLikeKubernetesResourceName(value)) continue
     if (!looksHighEntropy(value)) continue
 
     seen.add(value)
@@ -820,7 +844,12 @@ function looksHighEntropy(value: string): boolean {
   const hasUpper = /[A-Z]/.test(value)
   const hasLower = /[a-z]/.test(value)
   const hasDigit = /[0-9]/.test(value)
-  const hasTokenPunctuation = /[._~+/=-]/.test(value)
+  // "!#$%" are standard password-complexity special characters (see
+  // BARE_ENTROPY_TOKEN_SPLIT_RE below, which deliberately keeps them in one token for the
+  // same reason) -- a lowercase-only generated password built from digits and only these
+  // symbols has neither mixed case nor any of the other punctuation here, so it needs
+  // them counted too or it never reads as high entropy at all.
+  const hasTokenPunctuation = /[._~+/=!#$%-]/.test(value)
   return hasDigit && ((hasUpper && hasLower) || hasTokenPunctuation)
 }
 

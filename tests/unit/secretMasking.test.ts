@@ -304,6 +304,29 @@ describe('secret masking utilities', () => {
     expect(findBareHighEntropySecrets(route)).toHaveLength(0)
   })
 
+  it('finds a bare lowercase password built only from digits and kept password symbols', () => {
+    const password = 'n8q4!m2z#p7x$w5v%r9t6y1u'
+
+    expect(findBareHighEntropySecrets(password)).toEqual([{
+      ruleId: 'taviraq-bare-high-entropy',
+      description: 'Taviraq bare high-entropy value',
+      secret: password,
+      match: password
+    }])
+  })
+
+  it('does not flag a slash-free documentation slug as a bare secret', () => {
+    const slug = 'migration-guide-v2-authorization'
+
+    expect(findBareHighEntropySecrets(slug)).toHaveLength(0)
+  })
+
+  it('does not flag a Kubernetes-generated pod/resource name as a bare secret', () => {
+    const podName = 'frontend-api-7d9f4c6b5d-x8k2m'
+
+    expect(findBareHighEntropySecrets(podName)).toHaveLength(0)
+  })
+
   it('does not treat an existing secret placeholder body as a new bare secret', () => {
     const text = 'previous answer used [[TAVIRAQ_SECRET_1_GENERIC_API_KEY]] already'
 
