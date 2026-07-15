@@ -82,6 +82,10 @@ export function isLiveSessionStatus(status: SessionTabStatus | undefined): boole
   return status === 'running' || status === 'idle'
 }
 
+export function sessionStatusAfterPrompt(status: SessionTabStatus): SessionTabStatus {
+  return isLiveSessionStatus(status) ? 'idle' : status
+}
+
 export function getSessionRenderStatus(status: SessionTabStatus | undefined): SessionRenderStatus {
   if (isLiveSessionStatus(status)) return 'live'
   if (status === 'exited' || status === 'disconnected' || status === 'reconnecting') return status

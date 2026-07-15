@@ -9,11 +9,11 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { BookmarkPlus, ChevronDown, ChevronUp, Copy, FileText, MousePointerClick, Play, Search, Sparkles, SquareCheckBig, SquareTerminal, X } from 'lucide-react'
-import type { TerminalBlock, TerminalCursorStyle } from '@shared/types'
+import type { TerminalCursorStyle } from '@shared/types'
 import { useT } from '@renderer/i18n/language'
 import type { TerminalColors } from '@renderer/themes/types'
 import { getSessionRenderStatus, isLiveSessionStatus, type SessionTabInfo } from '@renderer/utils/sessionTabs'
-import { commandVisibleLineCount, lineMatchesCommand, lineMatchesCommandStart, stripCommandEcho, visualEndForLogicalSpan } from '@renderer/utils/terminalBlocks'
+import { BlockTracker, hasCommandText, type BlockTrackerActivity, type CommandBlock } from '@renderer/utils/blockTracker'
 import { outputWithVisibleCursor } from '@renderer/utils/terminalOutput'
 
 interface TerminalPaneProps {
@@ -31,18 +31,22 @@ interface TerminalPaneProps {
   outputBuffers: MutableRefObject<Map<string, string>>
   onOutput: (sessionId: string, data: string) => void
   onReconnect: (sessionId: string) => void
-  terminalBlocks: TerminalBlock[]
+  commandBlocks: CommandBlock[]
   selectedBlockIds: string[]
   onToggleBlockSelection: (blockId: string, additive: boolean) => void
   onClearBlockSelection: () => void
-  onAskBlocks: (blocks: TerminalBlock[]) => void
-  onRerunBlock: (block: TerminalBlock) => void
+  onBlocksChange: (sessionId: string, blocks: CommandBlock[]) => void
+  onBlockActivityChange: (sessionId: string, activity: BlockTrackerActivity) => void
+  onAskBlocks: (blocks: CommandBlock[]) => void
+  onRerunBlock: (block: CommandBlock) => void
   onSaveSnippet: (command: string) => void
   terminalTheme?: TerminalColors
 }
 
 export interface TerminalPaneHandle {
   focus: () => void
+  blockOutputText: (block: CommandBlock) => string
+  blockFullText: (block: CommandBlock) => string
 }
 
 const SEARCH_DECORATIONS = {
@@ -78,36 +82,6 @@ const DEFAULT_TERMINAL_THEME: TerminalColors = {
 
 // C1 control characters (U+0080–U+009F) that appear as ?<0080> artifacts
 const C1_REGEX = /[-]/g
-const ANSI_ESCAPE = String.fromCharCode(27)
-const OSC_RE = new RegExp(`${ANSI_ESCAPE}\\][^\\u0007]*(?:\\u0007|${ANSI_ESCAPE}\\\\)`, 'g')
-const ANSI_RE = new RegExp(
-  `${ANSI_ESCAPE}\\[[0-9;?]*[ -/]*[@-~]|${ANSI_ESCAPE}[@-_]|\\r(?!\\n)|[\\u0080-\\u009f]`,
-  'g'
-)
-
-function isPromptOnlyLine(text: string): boolean {
-  const trimmed = text.trim()
-  return trimmed === '~' || trimmed === '%' || trimmed === '>' || /^[➜$#❯>]\s*$/.test(trimmed)
-}
-
-function stripTerminalControls(value: string): string {
-  return value.replace(OSC_RE, '').replace(ANSI_RE, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-}
-
-function normalizeBlockOutput(block: TerminalBlock, output: string): string {
-  const raw = output.slice(block.startOffset, block.endOffset)
-  const clean = stripTerminalControls(raw)
-    .split('\n')
-    .filter((line) => !isPromptOnlyLine(line))
-    .join('\n')
-    .trim()
-  return stripCommandEcho(block.command, clean)
-}
-
-function blockText(block: TerminalBlock, output: string): string {
-  const cleanOutput = normalizeBlockOutput(block, output)
-  return [`$ ${block.command}`, cleanOutput].filter(Boolean).join('\n')
-}
 
 interface TerminalMetrics {
   top: number
@@ -137,13 +111,6 @@ function sameTerminalMetrics(a: TerminalMetrics | null, b: TerminalMetrics): boo
   )
 }
 
-function lineTextAt(terminal: Terminal, line: number): string {
-  return terminal.buffer.active.getLine(line)?.translateToString(true) ?? ''
-}
-
-function isWrappedRowAt(terminal: Terminal, line: number): boolean | undefined {
-  return terminal.buffer.active.getLine(line)?.isWrapped
-}
 
 function parseCssRgb(value: string | undefined): [number, number, number] | undefined {
   const color = value?.trim()
@@ -195,105 +162,6 @@ function terminalBlockDecorationColor(container: HTMLElement, alpha = 0.16): str
   return blendHex(background, accent, alpha)
 }
 
-function commandLinesForBlocks(terminal: Terminal, blocks: TerminalBlock[]): Map<string, number> {
-  const result = new Map<string, number>()
-  let searchFrom = 0
-  const findMatchingLine = (
-    start: number,
-    end: number,
-    command: string,
-    matcher: (line: string, command: string) => boolean
-  ): number | undefined => {
-    for (let line = start; line <= end; line += 1) {
-      if (matcher(lineTextAt(terminal, line), command)) {
-        return line
-      }
-    }
-
-    return undefined
-  }
-
-  for (const block of blocks.slice().sort((a, b) => a.startOffset - b.startOffset)) {
-    const command = block.command.trim()
-    if (!command) continue
-
-    const nearbyStart = Math.max(searchFrom, block.startLine - commandVisibleLineCount(command) - 2)
-    const nearbyEnd = Math.min(terminal.buffer.active.length - 1, block.startLine + 4)
-    const nearbyLine = findMatchingLine(nearbyStart, nearbyEnd, command, lineMatchesCommandStart) ??
-      findMatchingLine(nearbyStart, nearbyEnd, command, lineMatchesCommand)
-
-    if (nearbyLine !== undefined) {
-      result.set(block.id, nearbyLine)
-      searchFrom = nearbyLine + 1
-    }
-
-    if (result.has(block.id)) continue
-
-    const fallbackEnd = terminal.buffer.active.length - 1
-    const fallbackLine = findMatchingLine(searchFrom, fallbackEnd, command, lineMatchesCommandStart) ??
-      findMatchingLine(searchFrom, fallbackEnd, command, lineMatchesCommand)
-
-    if (fallbackLine !== undefined) {
-      result.set(block.id, fallbackLine)
-      searchFrom = fallbackLine + 1
-    }
-  }
-
-  return result
-}
-
-function blockVisualRanges(terminal: Terminal, blocks: TerminalBlock[]): Map<string, { start: number; end: number }> {
-  const commandLines = commandLinesForBlocks(terminal, blocks)
-  const sorted = blocks.slice().sort((a, b) => a.startOffset - b.startOffset)
-  const ranges = new Map<string, { start: number; end: number }>()
-
-  for (let index = 0; index < sorted.length; index += 1) {
-    const block = sorted[index]
-    const start = commandLines.get(block.id)
-    if (start === undefined) continue
-
-    const nextStart = sorted
-      .slice(index + 1)
-      .map((candidate) => commandLines.get(candidate.id))
-      .find((line): line is number => line !== undefined && line > start)
-
-    let nextPromptLine: number | undefined
-    const promptSearchEnd = nextStart === undefined ? terminal.buffer.active.length - 1 : nextStart
-    for (let line = start + 1; line <= promptSearchEnd; line += 1) {
-      if (isPromptOnlyLine(lineTextAt(terminal, line))) {
-        nextPromptLine = line
-        break
-      }
-    }
-
-    const logicalSpan = Math.max(0, block.endLine - block.startLine)
-    const storedEndBoundary = block.complete
-      ? Math.min(
-        terminal.buffer.active.length,
-        visualEndForLogicalSpan(
-          (line) => isWrappedRowAt(terminal, line),
-          terminal.buffer.active.length,
-          start,
-          logicalSpan
-        ) + 1
-      )
-      : terminal.buffer.active.length
-    const endBoundary = Math.min(
-      nextStart === undefined ? storedEndBoundary : nextStart,
-      nextPromptLine === undefined ? storedEndBoundary : nextPromptLine,
-      storedEndBoundary
-    )
-    let end = Math.max(start, endBoundary - 1)
-    while (end > start) {
-      const text = lineTextAt(terminal, end)
-      if (text.trim() !== '' && !isPromptOnlyLine(text)) break
-      end -= 1
-    }
-    ranges.set(block.id, { start, end })
-  }
-
-  return ranges
-}
 
 export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({
   activeSession,
@@ -310,10 +178,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   outputBuffers,
   onOutput,
   onReconnect,
-  terminalBlocks,
+  commandBlocks,
   selectedBlockIds,
   onToggleBlockSelection,
   onClearBlockSelection,
+  onBlocksChange,
+  onBlockActivityChange,
   onAskBlocks,
   onRerunBlock,
   onSaveSnippet,
@@ -339,8 +209,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const renderedSessionKeyRef = useRef<string>()
   const restoringRef = useRef(false)
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
-  const terminalBlocksRef = useRef<TerminalBlock[]>([])
+  const activeTrackerRef = useRef<BlockTracker | null>(null)
+  const onBlocksChangeRef = useRef(onBlocksChange)
+  const onBlockActivityChangeRef = useRef(onBlockActivityChange)
+  const commandBlocksRef = useRef<CommandBlock[]>([])
   const selectedBlockIdsRef = useRef<string[]>([])
+  const activeSessionNonceRef = useRef<string>()
   const blockHighlightFrameRef = useRef<number>()
   const blockHighlightDecorationsRef = useRef<Disposable[]>([])
   const [isSearchOpen, setIsSearchOpen] = useState(false)
@@ -354,9 +228,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const areTerminalBlocksAvailable = !isAlternateBufferActive
   const selectedBlocks = useMemo(
     () => areTerminalBlocksAvailable
-      ? terminalBlocks.filter((block) => selectedBlockIds.includes(block.id))
+      ? commandBlocks.filter((block) => selectedBlockIds.includes(block.id))
       : [],
-    [areTerminalBlocksAvailable, selectedBlockIds, terminalBlocks]
+    [areTerminalBlocksAvailable, commandBlocks, selectedBlockIds]
   )
 
   const syncBlockHighlightDecorations = useCallback((): void => {
@@ -370,7 +244,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     blockHighlightDecorationsRef.current = []
     if (terminal.buffer.active.type === 'alternate') return
 
-    const ranges = blockVisualRanges(terminal, terminalBlocksRef.current)
+    const tracker = activeTrackerRef.current
     const viewportY = terminal.buffer.active.viewportY
     const viewportEnd = viewportY + terminal.rows - 1
     const cursorLine = terminal.buffer.active.baseY + terminal.buffer.active.cursorY
@@ -382,7 +256,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       opacity: string
     ): void => {
       for (const blockId of blockIds) {
-        const range = ranges.get(blockId)
+        const blocks = commandBlocksRef.current
+        const block = blocks.find((b) => b.id === blockId)
+        const range = tracker && block ? tracker.blockHighlightRange(block) : undefined
         if (!range || range.end < viewportY || range.start > viewportEnd) continue
 
         const visibleStart = Math.max(range.start, viewportY)
@@ -495,14 +371,28 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   useImperativeHandle(ref, () => ({
     focus: () => {
       terminalRef.current?.focus()
+    },
+    blockOutputText: (block: CommandBlock) => {
+      return activeTrackerRef.current?.blockOutputText(block) ?? ''
+    },
+    blockFullText: (block: CommandBlock) => {
+      return activeTrackerRef.current?.blockFullText(block) ?? ''
     }
   }), [])
 
   useEffect(() => {
-    terminalBlocksRef.current = terminalBlocks
+    commandBlocksRef.current = commandBlocks
     selectedBlockIdsRef.current = selectedBlockIds
     scheduleBlockHighlightSync()
-  }, [scheduleBlockHighlightSync, selectedBlockIds, terminalBlocks])
+  }, [scheduleBlockHighlightSync, commandBlocks, selectedBlockIds])
+
+  useEffect(() => {
+    onBlocksChangeRef.current = onBlocksChange
+  }, [onBlocksChange])
+
+  useEffect(() => {
+    onBlockActivityChangeRef.current = onBlockActivityChange
+  }, [onBlockActivityChange])
 
   const closeSearch = useCallback((): void => {
     setIsSearchOpen(false)
@@ -657,6 +547,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         decoration.dispose()
       }
       blockHighlightDecorationsRef.current = []
+      activeTrackerRef.current?.dispose()
+      activeTrackerRef.current = null
       cancelScheduledResize(resizeFrameRef)
       delete (terminal as XtermInternals)._taviraqFit
       webglContextLossDisposable?.dispose()
@@ -755,7 +647,30 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   useEffect(() => {
     activeSessionIdRef.current = isLiveSessionStatus(activeSession?.status) ? activeSessionId : undefined
     activeSessionStatusRef.current = activeSession?.status
-  }, [activeSessionId, activeSession?.status])
+    activeSessionNonceRef.current = activeSession?.shellIntegrationNonce
+  }, [activeSessionId, activeSession?.status, activeSession?.shellIntegrationNonce])
+
+  const recreateBlockTracker = useCallback(() => {
+    const terminal = terminalRef.current
+    if (activeTrackerRef.current) {
+      activeTrackerRef.current.dispose()
+      activeTrackerRef.current = null
+    }
+    if (!terminal || !activeSessionId) return
+    const nonce = activeSessionNonceRef.current ?? ''
+    activeTrackerRef.current = new BlockTracker(
+      terminal,
+      activeSessionId,
+      nonce,
+      () => {
+        const blocks = activeTrackerRef.current?.getBlocks() ?? []
+        commandBlocksRef.current = blocks
+        onBlocksChangeRef.current(activeSessionId, blocks)
+        scheduleBlockHighlightSync()
+      },
+      (activity) => onBlockActivityChangeRef.current(activeSessionId, activity)
+    )
+  }, [activeSessionId, scheduleBlockHighlightSync])
 
   useEffect(() => {
     const terminal = terminalRef.current
@@ -770,6 +685,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     terminal.reset()
     searchRef.current?.clearDecorations()
     setSearchResults(null)
+
+    // Recreate BlockTracker for this session
+    recreateBlockTracker()
+
     const output = activeSessionId ? outputBuffers.current.get(activeSessionId) ?? '' : ''
     if (activeSessionId && output) {
       restoringRef.current = true
@@ -790,7 +709,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         void window.api.terminal.resize(activeSessionIdRef.current, terminal.cols, terminal.rows)
       }
     })
-  }, [activeSessionId, activeSessionRenderStatus, outputBuffers, scheduleTerminalMetricsUpdate, t])
+  }, [activeSessionId, activeSessionRenderStatus, outputBuffers, recreateBlockTracker, scheduleTerminalMetricsUpdate, t])
 
   useEffect(() => {
     if (!activeSessionId) return
@@ -820,9 +739,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     if (clearSignal === 0) return
 
     terminalRef.current?.clear()
+    // xterm disposes every registered marker on clear(), so the tracker's
+    // pending block (if any) is left holding disposed markers — recreate it
+    // rather than let the next block finalize as permanently unusable.
+    recreateBlockTracker()
     onSelectionChange('')
     onClearBlockSelection()
-  }, [clearSignal, onClearBlockSelection, onSelectionChange])
+  }, [clearSignal, onClearBlockSelection, onSelectionChange, recreateBlockTracker])
 
   useEffect(() => {
     const terminal = terminalRef.current
@@ -846,9 +769,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     }
   }
 
-  const blockAtClientY = useCallback((clientY: number): TerminalBlock | undefined => {
+  const blockAtClientY = useCallback((clientY: number): CommandBlock | undefined => {
     if (!areTerminalBlocksAvailable) return undefined
-    if (terminalBlocks.length === 0) return undefined
+    const tracker = activeTrackerRef.current
+    if (!tracker || !tracker.hasBlocks()) return undefined
 
     const terminal = terminalRef.current
     const container = containerRef.current
@@ -862,12 +786,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
 
     const cellHeight = rect.height / terminal.rows
     const line = terminal.buffer.active.viewportY + Math.floor((clientY - rect.top) / cellHeight)
-    const ranges = blockVisualRanges(terminal, terminalBlocks)
-    return terminalBlocks.find((block) => {
-      const range = ranges.get(block.id)
-      return range ? line >= range.start && line <= range.end : false
-    })
-  }, [areTerminalBlocksAvailable, terminalBlocks])
+    return tracker.blockAtRow(line)
+  }, [areTerminalBlocksAvailable])
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>): void => {
     terminalRef.current?.focus()
@@ -910,10 +830,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     onToggleBlockSelection(blockId, true)
   }
 
-  const selectedBlockText = useCallback((block: TerminalBlock): string => {
-    const output = outputBuffers.current.get(block.sessionId) ?? ''
-    return blockText(block, output)
-  }, [outputBuffers])
+  const selectedBlockText = useCallback((block: CommandBlock): string => {
+    return activeTrackerRef.current?.blockFullText(block) ?? block.command
+  }, [])
 
   const copyText = useCallback((text: string): void => {
     void navigator.clipboard.writeText(text)
@@ -924,33 +843,35 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   }, [copyText, selectedBlockText, selectedBlocks])
 
   const copySelectedCommands = useCallback((): void => {
+    if (!selectedBlocks.every(hasCommandText)) return
     copyText(selectedBlocks.map((block) => block.command).join('\n'))
   }, [copyText, selectedBlocks])
 
   const copySelectedOutputs = useCallback((): void => {
     copyText(selectedBlocks.map((block) => {
-      const output = outputBuffers.current.get(block.sessionId) ?? ''
-      return normalizeBlockOutput(block, output)
+      return activeTrackerRef.current?.blockOutputText(block) ?? ''
     }).join('\n\n'))
-  }, [copyText, outputBuffers, selectedBlocks])
+  }, [copyText, selectedBlocks])
 
   const rerunSelectedBlock = useCallback((): void => {
     const block = selectedBlocks[0]
-    if (!block || selectedBlocks.length !== 1 || !isLiveSessionStatus(activeSession?.status)) return
+    if (!block || !hasCommandText(block) || selectedBlocks.length !== 1 || !isLiveSessionStatus(activeSession?.status)) return
     onRerunBlock(block)
   }, [activeSession?.status, onRerunBlock, selectedBlocks])
 
   const saveSelectedSnippet = useCallback((): void => {
     const block = selectedBlocks[0]
-    if (!block || selectedBlocks.length !== 1) return
+    if (!block || !hasCommandText(block) || selectedBlocks.length !== 1) return
     onSaveSnippet(block.command.trim())
   }, [onSaveSnippet, selectedBlocks])
+
+  const selectedCommandsAvailable = selectedBlocks.every(hasCommandText)
 
   const visibleSelectedBlocks = terminalMetrics
     ? selectedBlocks
       .map((block) => {
-        const terminal = terminalRef.current
-        const range = terminal ? blockVisualRanges(terminal, terminalBlocks).get(block.id) : undefined
+        const tracker = activeTrackerRef.current
+        const range = tracker ? tracker.blockHighlightRange(block) : undefined
         if (!range) return null
 
         const viewportY = terminalRef.current?.buffer.active.viewportY ?? terminalMetrics.viewportY
@@ -967,7 +888,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           height: Math.max(terminalMetrics.cellHeight, (visibleEnd - visibleStart + 1) * terminalMetrics.cellHeight)
         }
       })
-      .filter((entry): entry is { block: TerminalBlock; top: number; height: number } => Boolean(entry))
+      .filter((entry): entry is { block: CommandBlock; top: number; height: number } => Boolean(entry))
     : []
   const toolbarTop = terminalMetrics && visibleSelectedBlocks.length
     ? Math.min(
@@ -977,9 +898,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     : 10
   const hoveredBlockHandle = areTerminalBlocksAvailable && terminalMetrics && hoveredBlockId
     ? (() => {
-      const terminal = terminalRef.current
-      const hoveredBlock = terminalBlocks.find((block) => block.id === hoveredBlockId)
-      const range = terminal && hoveredBlock ? blockVisualRanges(terminal, terminalBlocks).get(hoveredBlock.id) : undefined
+      const tracker = activeTrackerRef.current
+      const hoveredBlock = commandBlocksRef.current.find((block) => block.id === hoveredBlockId)
+      const range = tracker && hoveredBlock ? tracker.blockHighlightRange(hoveredBlock) : undefined
       if (!hoveredBlock || !range) return null
 
       const viewportY = terminalRef.current?.buffer.active.viewportY ?? terminalMetrics.viewportY
@@ -1025,13 +946,24 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       {selectedBlocks.length && visibleSelectedBlocks.length ? (
         <div className="terminal-block-toolbar" style={{ top: toolbarTop }}>
           <span className="terminal-block-count">{selectedBlocks.length}</span>
+          {!selectedCommandsAvailable ? (
+            <span className="terminal-block-command-unavailable">
+              {t('terminal.blocks.commandUnavailable')}
+            </span>
+          ) : null}
           <button type="button" onClick={() => onAskBlocks(selectedBlocks)} title={t('terminal.blocks.askAi')} aria-label={t('terminal.blocks.askAi')}>
             <Sparkles size={14} aria-hidden="true" />
           </button>
           <button type="button" onClick={copySelectedBlocks} title={t('terminal.blocks.copyBlock')} aria-label={t('terminal.blocks.copyBlock')}>
             <Copy size={14} aria-hidden="true" />
           </button>
-          <button type="button" onClick={copySelectedCommands} title={t('terminal.blocks.copyCommand')} aria-label={t('terminal.blocks.copyCommand')}>
+          <button
+            type="button"
+            onClick={copySelectedCommands}
+            disabled={!selectedCommandsAvailable}
+            title={selectedCommandsAvailable ? t('terminal.blocks.copyCommand') : t('terminal.blocks.commandUnavailable')}
+            aria-label={selectedCommandsAvailable ? t('terminal.blocks.copyCommand') : t('terminal.blocks.commandUnavailable')}
+          >
             <SquareTerminal size={14} aria-hidden="true" />
           </button>
           <button type="button" onClick={copySelectedOutputs} title={t('terminal.blocks.copyOutput')} aria-label={t('terminal.blocks.copyOutput')}>
@@ -1040,18 +972,18 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           <button
             type="button"
             onClick={rerunSelectedBlock}
-            disabled={selectedBlocks.length !== 1 || !isLiveSessionStatus(activeSession?.status)}
-            title={t('terminal.blocks.rerunCommand')}
-            aria-label={t('terminal.blocks.rerunCommand')}
+            disabled={!selectedCommandsAvailable || selectedBlocks.length !== 1 || !isLiveSessionStatus(activeSession?.status)}
+            title={selectedCommandsAvailable ? t('terminal.blocks.rerunCommand') : t('terminal.blocks.commandUnavailable')}
+            aria-label={selectedCommandsAvailable ? t('terminal.blocks.rerunCommand') : t('terminal.blocks.commandUnavailable')}
           >
             <Play size={14} aria-hidden="true" />
           </button>
           <button
             type="button"
             onClick={saveSelectedSnippet}
-            disabled={selectedBlocks.length !== 1}
-            title={t('terminal.blocks.saveSnippet')}
-            aria-label={t('terminal.blocks.saveSnippet')}
+            disabled={!selectedCommandsAvailable || selectedBlocks.length !== 1}
+            title={selectedCommandsAvailable ? t('terminal.blocks.saveSnippet') : t('terminal.blocks.commandUnavailable')}
+            aria-label={selectedCommandsAvailable ? t('terminal.blocks.saveSnippet') : t('terminal.blocks.commandUnavailable')}
           >
             <BookmarkPlus size={14} aria-hidden="true" />
           </button>

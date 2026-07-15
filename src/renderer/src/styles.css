@@ -762,6 +762,15 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.terminal-block-command-unavailable {
+  padding: 0 6px;
+  border-right: 0.5px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
 .terminal-block-toolbar button {
   display: inline-flex;
   align-items: center;

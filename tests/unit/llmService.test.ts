@@ -180,6 +180,55 @@ describe('llmService', () => {
     expect(result.secretContext.bindings).toHaveLength(0)
   })
 
+  it('strips OSC 133/633 shell-integration markers, including the nonce, from terminal output before sending to the provider', async () => {
+    const encoder = new TextEncoder()
+    let requestBody = ''
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit): Promise<Response> => {
+      requestBody = typeof init?.body === 'string' ? init.body : ''
+      return Promise.resolve(new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'))
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        }
+      }), { status: 200, statusText: 'OK' }))
+    }))
+
+    const { streamChatCompletion } = await import('@main/services/llmService')
+    const nonce = 'shell-integration-nonce-should-not-leak'
+    const terminalOutput = [
+      '\x1b]133;A\x07',
+      '$ ls\r\n',
+      `\x1b]633;E;ls;${nonce}\x07`,
+      '\x1b]133;C\x07',
+      'file.txt\r\n',
+      '\x1b]133;D;0\x07'
+    ].join('')
+
+    await streamChatCompletion({
+      requestId: 'request-osc',
+      provider: {
+        name: 'test',
+        baseUrl: 'https://example.test',
+        apiKeyRef: 'test',
+        selectedModel: 'chat-model'
+      },
+      messages: [
+        { role: 'user', content: 'what happened?' }
+      ],
+      context: {
+        selectedText: '',
+        assistMode: 'agent',
+        terminalOutput
+      }
+    }, () => {})
+
+    expect(requestBody).not.toContain(nonce)
+    expect(requestBody).not.toContain('633;E')
+    expect(requestBody).not.toContain('133;A')
+    expect(requestBody).toContain('file.txt')
+  })
+
   it('wraps MCP tool JSON before sending it back to the model', async () => {
     vi.doMock('@main/services/mcpRuntime', () => ({
       getEnabledMcpTools: vi.fn(() => [{

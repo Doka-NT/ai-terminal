@@ -336,6 +336,7 @@ export interface Translations {
   'terminal.blocks.copyBlock': string
   'terminal.blocks.copyCommand': string
   'terminal.blocks.copyOutput': string
+  'terminal.blocks.commandUnavailable': string
   'terminal.blocks.rerunCommand': string
   'terminal.blocks.rerunTitle': string
   'terminal.blocks.rerunBody': string
@@ -895,6 +896,7 @@ export const en: Translations = {
   'terminal.blocks.copyBlock': 'Copy block',
   'terminal.blocks.copyCommand': 'Copy command',
   'terminal.blocks.copyOutput': 'Copy output',
+  'terminal.blocks.commandUnavailable': 'Command unavailable',
   'terminal.blocks.rerunCommand': 'Rerun command',
   'terminal.blocks.rerunTitle': 'Rerun selected command?',
   'terminal.blocks.rerunBody': 'This command will be sent to the active terminal session.',
@@ -1442,6 +1444,7 @@ export const ru: Translations = {
   'terminal.blocks.copyBlock': 'Копировать блок',
   'terminal.blocks.copyCommand': 'Копировать команду',
   'terminal.blocks.copyOutput': 'Копировать вывод',
+  'terminal.blocks.commandUnavailable': 'Команда недоступна',
   'terminal.blocks.rerunCommand': 'Запустить снова',
   'terminal.blocks.rerunTitle': 'Запустить выбранную команду снова?',
   'terminal.blocks.rerunBody': 'Команда будет отправлена в активную сессию терминала.',
@@ -1989,6 +1992,7 @@ export const cn: Translations = {
   'terminal.blocks.copyBlock': '复制块',
   'terminal.blocks.copyCommand': '复制命令',
   'terminal.blocks.copyOutput': '复制输出',
+  'terminal.blocks.commandUnavailable': '命令不可用',
   'terminal.blocks.rerunCommand': '重新运行命令',
   'terminal.blocks.rerunTitle': '重新运行所选命令？',
   'terminal.blocks.rerunBody': '此命令将发送到活动终端会话。',

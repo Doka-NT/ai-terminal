@@ -45,6 +45,7 @@ import {
 } from '@main/utils/secretMasking'
 import { getApiKey, getProxyPassword } from './secretStore'
 import { callMcpTool, getEnabledMcpTools, type McpRuntimeTool } from './mcpRuntime'
+import { stripAnsi } from '@shared/terminalText'
 
 const COMMAND_RISK_TIMEOUT_MS = 15_000
 const ANTHROPIC_API_VERSION = '2023-06-01'
@@ -1574,16 +1575,6 @@ function parseRiskLevel(value: unknown): CommandRiskLevel | undefined {
   if (value === 'danger') return 'danger'
   if (value === 'warning') return 'warning'
   return undefined
-}
-
-const ANSI_ESCAPE = String.fromCharCode(27)
-const ANSI_RE = new RegExp(
-  `${ANSI_ESCAPE}\\[[0-9;]*[mGKHFABCDJMPXZ]|${ANSI_ESCAPE}[@-_]|${ANSI_ESCAPE}\\[[0-9;]*[Rn]`,
-  'g'
-)
-
-function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, '')
 }
 
 function buildMessages(messages: ChatMessage[], context: ChatStreamRequest['context']): ChatMessage[] {

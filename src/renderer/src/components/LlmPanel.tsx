@@ -43,7 +43,7 @@ import { themes } from '@renderer/themes/definitions'
 import { buildAgentContinuation, wasTerminalContextSentToProvider } from '@renderer/utils/agentContinuation'
 import { estimateComposerContextTokens, formatComposerContextTokens } from '@renderer/utils/composerContext'
 import { isChatScrolledToBottom } from '@renderer/utils/chatAutoscroll'
-import { cleanCommandOutput, stripAnsi } from '@renderer/utils/commandOutput'
+import { cleanCommandOutput } from '@renderer/utils/commandOutput'
 import { formatDataBytes } from '@renderer/utils/dataUsage'
 import { findCurrentRequestPrivacyNoticeIndex, mergePrivacyNotices } from '@renderer/utils/privacyNotices'
 import {
@@ -1247,8 +1247,8 @@ export function LlmPanel({
 
   const getBoundedTerminalOutputForRequest = useCallback((sessionId: string, mode: AssistMode): string | undefined => {
     if (mode === 'off') return undefined
-    const terminalOutput = getOutputForSessionRef.current(sessionId).slice(-maxOutputContextRef.current)
-    return terminalOutput || undefined
+    // getOutputForSession already strips OSC and bounds by length (see App.tsx).
+    return getOutputForSessionRef.current(sessionId) || undefined
   }, [])
 
   const saveThreadSnapshotToHistory = useCallback((thread: AssistantThread): string | undefined => {
@@ -2097,7 +2097,8 @@ export function LlmPanel({
   const buildTerminalContext = useCallback((sessionId: string): TerminalContext => {
     const thread = getThread(sessionId)
     const session = thread.session ?? (activeSessionRef.current?.id === sessionId ? summarizeSession(activeSessionRef.current) : undefined)
-    const terminalOutput = stripAnsi(getOutputForSessionRef.current(sessionId)).slice(-maxOutputContextRef.current)
+    // getOutputForSession already strips OSC and bounds by length (see App.tsx).
+    const terminalOutput = getOutputForSessionRef.current(sessionId)
     const providerTerminalContext = getProviderTerminalContext({
       assistMode: 'agent',
       selectedText: selectedTextRef.current,
@@ -3271,7 +3272,8 @@ export function LlmPanel({
   }, [modelSwitchRequest, openModelSwitcher])
 
   const modelLabel = useMemo(() => formatModelLabel(provider.selectedModel), [provider.selectedModel])
-  const terminalOutputForComposer = stripAnsi(getOutput()).slice(-maxOutputContext)
+  // getOutputForSession/getOutput already strip OSC and bound by length (see App.tsx).
+  const terminalOutputForComposer = getOutput()
   const strippedTerminalOutput = terminalOutputForComposer.slice(-2000)
   const terminalContextAllowed = assistMode !== 'off' && !strictTerminalContextActive
   const composerTerminalOutput = terminalContextAllowed ? terminalOutputForComposer : ''

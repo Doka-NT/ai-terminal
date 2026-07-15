@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { ChevronLeft, Command, Copy, Pencil, PlugZap, RotateCcw, Server, SquareTerminal, Terminal, Wifi, WifiOff, X, PanelRightClose, PanelRightOpen, Plus, Settings2, ShieldAlert } from 'lucide-react'
-import type { AssistMode, CommandSnippet, PromptTemplate, RestorableAssistantThread, RestorableAssistantThreads, RestoredTerminalSession, SessionStateSnapshot, SSHProfileConfig, TerminalBlock, TerminalCursorStyle, TerminalSessionInfo } from '@shared/types'
+import type { AssistMode, CommandSnippet, PromptTemplate, RestorableAssistantThread, RestorableAssistantThreads, RestoredTerminalSession, SessionStateSnapshot, SSHProfileConfig, TerminalCursorStyle, TerminalSessionInfo } from '@shared/types'
+import { remapRestored633ENonce, type BlockTrackerActivity, type CommandBlock } from './utils/blockTracker'
+import { boundTerminalOutputForRequest, trimTerminalOutputBuffer } from '@shared/terminalText'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { LlmPanel } from './components/LlmPanel'
 import { CommandPalette, type CommandPaletteAction, type CommandPaletteCategoryFilter } from './components/CommandPalette'
@@ -12,8 +14,7 @@ import { TRANSLATIONS, type Language, type Translations } from './i18n/translati
 import { themeMap, themes, DEFAULT_THEME_ID } from './themes/definitions'
 import { applyThemeToDom } from './themes/applyTheme'
 import type { TerminalColors } from './themes/types'
-import { findBufferedCommandStartOffset, findCommandStartOffset, lineMatchesCommandStart, stripCommandEcho } from './utils/terminalBlocks'
-import { compactPath, getCwdBasename, getSessionStatusMeta, getSessionTooltip, getSshTabIndicatorTitle, getTabLabel, isLiveSessionStatus, mergeRestoredSessionOutput, type SessionTabStatus } from './utils/sessionTabs'
+import { compactPath, getCwdBasename, getSessionStatusMeta, getSessionTooltip, getSshTabIndicatorTitle, getTabLabel, isLiveSessionStatus, mergeRestoredSessionOutput, sessionStatusAfterPrompt, type SessionTabStatus } from './utils/sessionTabs'
 
 interface SessionState extends TerminalSessionInfo {
   status: SessionTabStatus
@@ -206,72 +207,7 @@ function migrateLocalStorageKeys(): void {
   }
 }
 
-function lineCount(output: string): number {
-  if (!output) return 0
-  return output.split('\n').length - 1
-}
 
-function findBlockVisualStartLine(output: string): number {
-  const lines = output.split('\n')
-  return Math.max(0, lines.length - 2)
-}
-
-function resolveNewBlockStart(output: string, command: string, echoed: boolean): { offset: number; line: number } {
-  if (echoed) {
-    const offset = findBufferedCommandStartOffset(output, command)
-    if (offset < output.length) {
-      return {
-        offset,
-        line: lineCount(output.slice(0, offset))
-      }
-    }
-  }
-
-  return {
-    offset: output.length,
-    line: findBlockVisualStartLine(output)
-  }
-}
-
-function updateBlockBounds(block: TerminalBlock, output: string): TerminalBlock {
-  const lineEnd = output.indexOf('\n', block.startOffset)
-  const storedCommandLine = output.slice(block.startOffset, lineEnd === -1 ? output.length : lineEnd)
-  const hasCommandAtStoredStart = storedCommandLine.includes(block.command) ||
-    lineMatchesCommandStart(storedCommandLine, block.command)
-  const commandStart = hasCommandAtStoredStart
-    ? block.startOffset
-    : findCommandStartOffset(output, block.command, {
-      searchStart: block.startOffset,
-      preference: 'first'
-    })
-  const hasCommandInBuffer = commandStart < output.length
-  const startOffset = hasCommandInBuffer ? commandStart : block.startOffset
-  const startLine = hasCommandInBuffer
-    ? lineCount(output.slice(0, commandStart))
-    : block.startLine
-
-  return {
-    ...block,
-    startOffset,
-    startLine,
-    endOffset: output.length,
-    endLine: Math.max(startLine, lineCount(output))
-  }
-}
-
-function stripTerminalControls(value: string): string {
-  const escape = String.fromCharCode(27)
-  return value
-    .replace(new RegExp(`${escape}\\][^\\u0007]*(?:\\u0007|${escape}\\\\)`, 'g'), '')
-    .replace(new RegExp(`${escape}\\[[0-9;?]*[ -/]*[@-~]|${escape}[@-_]|\\r(?!\\n)|[\\u0080-\\u009f]`, 'g'), '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-}
-
-function isPromptOnlyLine(line: string): boolean {
-  const trimmed = line.trim()
-  return trimmed === '~' || trimmed === '%' || trimmed === '>' || /^[➜$#❯>]\s*$/.test(trimmed)
-}
 
 export function App(): JSX.Element {
   migrateLocalStorageKeys()
@@ -335,8 +271,7 @@ export function App(): JSX.Element {
   const maxOutputContextRef = useRef(maxOutputContext)
   const windowOpacityRef = useRef(windowOpacity)
   const outputBuffers = useRef(new Map<string, string>())
-  const terminalBlocksRef = useRef(new Map<string, TerminalBlock[]>())
-  const activeBlockIdsRef = useRef(new Map<string, string>())
+  const commandBlocksRef = useRef(new Map<string, CommandBlock[]>())
   const appShellRef = useRef<HTMLElement>(null)
   const sidebarVisibleRef = useRef(sidebarVisible)
   const sidebarTransitionTimerRef = useRef<number>()
@@ -350,7 +285,6 @@ export function App(): JSX.Element {
   const assistantThreadsRef = useRef<RestorableAssistantThreads>({})
   const cancelledReconnectsRef = useRef(new Set<string>())
   const reconnectReplacementRef = useRef(new Map<string, string>())
-  const [terminalBlocksRevision, setTerminalBlocksRevision] = useState(0)
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([])
   const [blockPromptRequest, setBlockPromptRequest] = useState<BlockPromptRequest | null>(null)
   const [snippetDraftRequest, setSnippetDraftRequest] = useState<SnippetDraftRequest | null>(null)
@@ -384,9 +318,7 @@ export function App(): JSX.Element {
   }, [beginSidebarVisibilityTransition])
   const activeCwd = activeSession?.cwd ?? activeSession?.command ?? ''
   const activeCwdDisplay = compactPath(activeCwd, 36)
-  const activeTerminalBlocks = activeSessionId && terminalBlocksRevision >= 0
-    ? terminalBlocksRef.current.get(activeSessionId) ?? []
-    : []
+  const activeCommandBlocks = activeSessionId ? commandBlocksRef.current.get(activeSessionId) ?? [] : []
   const appT = useCallback((key: keyof Translations, vars?: Record<string, string | number>): string => {
     let result = TRANSLATIONS[language][key]
     if (vars) {
@@ -399,7 +331,10 @@ export function App(): JSX.Element {
 
   const getOutputForSession = useCallback((sessionId: string): string => {
     const buf = outputBuffers.current.get(sessionId) ?? ''
-    return buf.slice(-maxOutputContextRef.current)
+    // Strip OSC before bounding by length: slicing the raw buffer first can
+    // bisect an OSC 633;E marker, leaving a headless `633;E;...;<nonce>` tail
+    // that no consumer's stripAnsi can recognize as an escape sequence.
+    return boundTerminalOutputForRequest(buf, maxOutputContextRef.current) ?? ''
   }, [])
 
   const getOutput = useCallback((): string => {
@@ -407,81 +342,20 @@ export function App(): JSX.Element {
     return getOutputForSession(activeSessionId)
   }, [activeSessionId, getOutputForSession])
 
-  const touchTerminalBlocks = useCallback(() => {
-    setTerminalBlocksRevision((version) => version + 1)
+
+  const handleBlocksChange = useCallback((sessionId: string, blocks: CommandBlock[]): void => {
+    commandBlocksRef.current.set(sessionId, blocks)
   }, [])
 
-  const updateActiveBlockEnd = useCallback((sessionId: string, output: string): void => {
-    const blockId = activeBlockIdsRef.current.get(sessionId)
-    if (!blockId) return
-
-    const blocks = terminalBlocksRef.current.get(sessionId) ?? []
-    const block = blocks.find((candidate) => candidate.id === blockId)
-    if (!block) return
-
-    Object.assign(block, updateBlockBounds(block, output))
-  }, [])
-
-  const handleCommandBlockStart = useCallback((sessionId: string, command: string, echoed: boolean): void => {
+  const handleBlockActivityChange = useCallback((sessionId: string, activity: BlockTrackerActivity): void => {
     setSessions((current) =>
       current.map((session) =>
-        session.id === sessionId && session.status !== 'disconnected'
-          && session.status !== 'reconnecting'
-          && session.status !== 'exited'
-          ? { ...session, status: 'running' }
+        session.id === sessionId && isLiveSessionStatus(session.status)
+          ? { ...session, status: activity }
           : session
       )
     )
-    const output = outputBuffers.current.get(sessionId) ?? ''
-    const start = resolveNewBlockStart(output, command, echoed)
-    const activeBlockId = activeBlockIdsRef.current.get(sessionId)
-    if (activeBlockId) {
-      const currentBlocks = terminalBlocksRef.current.get(sessionId) ?? []
-      const previousOutput = start.offset < output.length ? output.slice(0, start.offset) : output
-      terminalBlocksRef.current.set(sessionId, currentBlocks.map((block) =>
-        block.id === activeBlockId
-          ? { ...updateBlockBounds(block, previousOutput), complete: true }
-          : block
-      ))
-    }
-
-    const block: TerminalBlock = {
-      id: crypto.randomUUID(),
-      sessionId,
-      command,
-      startOffset: start.offset,
-      endOffset: output.length,
-      startLine: start.line,
-      endLine: Math.max(start.line, lineCount(output)),
-      complete: false
-    }
-
-    activeBlockIdsRef.current.set(sessionId, block.id)
-    terminalBlocksRef.current.set(sessionId, [...(terminalBlocksRef.current.get(sessionId) ?? []), block])
-    touchTerminalBlocks()
-  }, [touchTerminalBlocks])
-
-  const handleCommandBlockComplete = useCallback((sessionId: string): void => {
-    setSessions((current) =>
-      current.map((session) =>
-        session.id === sessionId && session.status === 'running'
-          ? { ...session, status: 'idle' }
-          : session
-      )
-    )
-    const blockId = activeBlockIdsRef.current.get(sessionId)
-    if (!blockId) return
-
-    const output = outputBuffers.current.get(sessionId) ?? ''
-    const blocks = terminalBlocksRef.current.get(sessionId) ?? []
-    terminalBlocksRef.current.set(sessionId, blocks.map((block) =>
-      block.id === blockId
-        ? { ...updateBlockBounds(block, output), complete: true }
-        : block
-    ))
-    activeBlockIdsRef.current.delete(sessionId)
-    touchTerminalBlocks()
-  }, [touchTerminalBlocks])
+  }, [])
 
   const toggleBlockSelection = useCallback((blockId: string, additive: boolean): void => {
     setSelectedBlockIds((current) => {
@@ -496,21 +370,12 @@ export function App(): JSX.Element {
     setSelectedBlockIds([])
   }, [])
 
-  const askAboutBlocks = useCallback((blocks: TerminalBlock[]): void => {
+  const askAboutBlocks = useCallback((blocks: CommandBlock[]): void => {
     if (!activeSessionId || !blocks.length) return
 
     const selected = blocks
-      .slice()
-      .sort((a, b) => a.startOffset - b.startOffset)
       .map((block, index) => {
-        const output = outputBuffers.current.get(block.sessionId) ?? ''
-        const rawOutput = stripTerminalControls(output.slice(block.startOffset, block.endOffset))
-          .split('\n')
-          .filter((line) => !isPromptOnlyLine(line))
-          .join('\n')
-          .trim()
-        const cleanOutput = stripCommandEcho(block.command, rawOutput)
-        const text = [`$ ${block.command}`, cleanOutput].filter(Boolean).join('\n')
+        const text = terminalPaneRef.current?.blockFullText(block) ?? (block.command.trim() ? `$ ${block.command}` : '')
         return `${appT('terminal.blocks.label', { index: index + 1 })}\n\`\`\`text\n${text}\n\`\`\``
       })
       .join('\n\n')
@@ -535,7 +400,8 @@ export function App(): JSX.Element {
     setPendingBlockPrompt(null)
   }, [pendingBlockPrompt, showSidebar])
 
-  const requestBlockRerun = useCallback((block: TerminalBlock): void => {
+  const requestBlockRerun = useCallback((block: CommandBlock): void => {
+    if (!block.command.trim()) return
     setPendingBlockRerun({
       sessionId: block.sessionId,
       command: block.command
@@ -575,6 +441,7 @@ export function App(): JSX.Element {
           reconnectCommand: session.reconnectCommand,
           command: session.command,
           createdAt: session.createdAt,
+          shellIntegrationNonce: session.shellIntegrationNonce,
           status: session.kind === 'ssh' || session.status === 'reconnecting'
             ? 'disconnected'
             : session.status === 'exited' || session.status === 'disconnected' ? session.status : 'running',
@@ -592,17 +459,14 @@ export function App(): JSX.Element {
     const prev = outputBuffers.current.get(sessionId) ?? ''
     const next = prev + data
     if (next.length > MAX_OUTPUT_CHARS) {
-      outputBuffers.current.set(sessionId, next.slice(-MAX_OUTPUT_CHARS))
-      terminalBlocksRef.current.delete(sessionId)
-      activeBlockIdsRef.current.delete(sessionId)
+      outputBuffers.current.set(sessionId, trimTerminalOutputBuffer(next, MAX_OUTPUT_CHARS))
+      commandBlocksRef.current.delete(sessionId)
       setSelectedBlockIds([])
-      touchTerminalBlocks()
     } else {
       outputBuffers.current.set(sessionId, next)
-      updateActiveBlockEnd(sessionId, next)
     }
     scheduleSessionStateSave()
-  }, [scheduleSessionStateSave, touchTerminalBlocks, updateActiveBlockEnd])
+  }, [scheduleSessionStateSave])
 
   useEffect(() => {
     sidebarVisibleRef.current = sidebarVisible
@@ -865,7 +729,12 @@ export function App(): JSX.Element {
             status: 'running'
           })
           idMap.set(saved.id, session.id)
-          restoredOutputs.set(session.id, `${saved.output ?? ''}${fallbackNotice}`)
+          const restoredOutput = remapRestored633ENonce(
+            saved.output ?? '',
+            saved.shellIntegrationNonce,
+            session.shellIntegrationNonce
+          )
+          restoredOutputs.set(session.id, `${restoredOutput}${fallbackNotice}`)
         } else {
           const id = `restored-${crypto.randomUUID()}`
           restoredSessions.push({
@@ -920,6 +789,16 @@ export function App(): JSX.Element {
   }, [createLocalSession, scheduleSessionStateSave])
 
   useEffect(() => {
+    const offPrompt = window.api.terminal.onPrompt(({ sessionId }) => {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === sessionId
+            ? { ...session, status: sessionStatusAfterPrompt(session.status) }
+            : session
+        )
+      )
+    })
+
     const offExit = window.api.terminal.onExit(({ sessionId }) => {
       setSessions((current) =>
         current.map((session) =>
@@ -952,25 +831,14 @@ export function App(): JSX.Element {
     })
 
     return () => {
+      offPrompt()
       offExit()
       offCwd()
       offSession()
     }
   }, [])
 
-  useEffect(() => {
-    const offCommand = window.api.terminal.onCommand(({ sessionId, command, echoed }) => {
-      handleCommandBlockStart(sessionId, command, echoed)
-    })
-    const offPrompt = window.api.terminal.onPrompt(({ sessionId }) => {
-      handleCommandBlockComplete(sessionId)
-    })
 
-    return () => {
-      offCommand()
-      offPrompt()
-    }
-  }, [handleCommandBlockComplete, handleCommandBlockStart])
 
   const closeSession = useCallback(async (sessionId: string) => {
     const closing = sessions.find((session) => session.id === sessionId)
@@ -990,10 +858,8 @@ export function App(): JSX.Element {
       await window.api.terminal.kill(sessionId)
     }
     outputBuffers.current.delete(sessionId)
-    terminalBlocksRef.current.delete(sessionId)
-    activeBlockIdsRef.current.delete(sessionId)
+    commandBlocksRef.current.delete(sessionId)
     setSelectedBlockIds([])
-    touchTerminalBlocks()
     const remaining = sessions.filter((session) => session.id !== sessionId)
     setSessions(remaining)
     setActiveSessionId((current) => {
@@ -1003,7 +869,7 @@ export function App(): JSX.Element {
     if (remaining.length === 0) {
       void createLocalSession()
     }
-  }, [sessions, createLocalSession, touchTerminalBlocks])
+  }, [sessions, createLocalSession])
 
   const reconnectSession = useCallback(async (sessionId: string) => {
     const session = sessions.find((candidate) => candidate.id === sessionId)
@@ -1036,10 +902,8 @@ export function App(): JSX.Element {
       const earlyOutput = outputBuffers.current.get(next.id)
       outputBuffers.current.delete(sessionId)
       outputBuffers.current.set(next.id, mergeRestoredSessionOutput(restoredOutput, earlyOutput))
-      terminalBlocksRef.current.delete(sessionId)
-      activeBlockIdsRef.current.delete(sessionId)
+      commandBlocksRef.current.delete(sessionId)
       setSelectedBlockIds([])
-      touchTerminalBlocks()
       assistantThreadsRef.current = remapAssistantThreadId(assistantThreadsRef.current, sessionId, next.id)
       setRestoredAssistantThreads(assistantThreadsRef.current)
       setSessions((current) =>
@@ -1071,7 +935,7 @@ export function App(): JSX.Element {
         )
       )
     }
-  }, [sessions, touchTerminalBlocks])
+  }, [sessions])
 
   const duplicateSession = useCallback(async (sessionId: string) => {
     const session = sessions.find((candidate) => candidate.id === sessionId)
@@ -1149,12 +1013,10 @@ export function App(): JSX.Element {
     if (!activeSessionId) return
 
     outputBuffers.current.set(activeSessionId, '')
-    terminalBlocksRef.current.delete(activeSessionId)
-    activeBlockIdsRef.current.delete(activeSessionId)
+    commandBlocksRef.current.delete(activeSessionId)
     setSelectedBlockIds([])
-    touchTerminalBlocks()
     setTerminalClearVersion((version) => version + 1)
-  }, [activeSessionId, touchTerminalBlocks])
+  }, [activeSessionId])
 
   const insertCommandSnippet = useCallback((command: string, run: boolean) => {
     if (!activeSessionId || !isLiveSessionStatus(activeSession?.status)) return
@@ -1706,10 +1568,12 @@ export function App(): JSX.Element {
           outputBuffers={outputBuffers}
           onOutput={handleOutput}
           onReconnect={(sessionId) => { void reconnectSession(sessionId) }}
-          terminalBlocks={activeTerminalBlocks}
+          commandBlocks={activeCommandBlocks}
           selectedBlockIds={selectedBlockIds}
           onToggleBlockSelection={toggleBlockSelection}
           onClearBlockSelection={clearBlockSelection}
+          onBlocksChange={handleBlocksChange}
+          onBlockActivityChange={handleBlockActivityChange}
           onAskBlocks={askAboutBlocks}
           onRerunBlock={requestBlockRerun}
           onSaveSnippet={openSnippetForm}

@@ -12,6 +12,7 @@ import {
   getTabLabel,
   isLiveSessionStatus,
   mergeRestoredSessionOutput,
+  sessionStatusAfterPrompt,
   type SessionTabInfo
 } from '@renderer/utils/sessionTabs'
 
@@ -80,6 +81,14 @@ describe('session tab helpers', () => {
       command: 'ssh',
       createdAt: 1_000
     })).toBe('SSH session')
+  })
+
+  it('marks live background sessions idle when their prompt event arrives', () => {
+    expect(sessionStatusAfterPrompt('running')).toBe('idle')
+    expect(sessionStatusAfterPrompt('idle')).toBe('idle')
+    expect(sessionStatusAfterPrompt('reconnecting')).toBe('reconnecting')
+    expect(sessionStatusAfterPrompt('disconnected')).toBe('disconnected')
+    expect(sessionStatusAfterPrompt('exited')).toBe('exited')
   })
 
   it('returns compact cwd badges and local command targets', () => {

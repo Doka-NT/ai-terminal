@@ -29,6 +29,7 @@ export interface TerminalSessionInfo {
   reconnectCommand?: string
   command: string
   createdAt: number
+  shellIntegrationNonce?: string
 }
 
 export interface CreateTerminalRequest {
@@ -239,6 +240,7 @@ export interface RestoredTerminalSession {
   reconnectCommand?: string
   command: string
   createdAt: number
+  shellIntegrationNonce?: string
   status: 'running' | 'exited' | 'disconnected'
   output: string
 }

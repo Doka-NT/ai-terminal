@@ -3,13 +3,16 @@ import { app } from 'electron'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { SaveSessionStateRequest, SessionStateSnapshot } from '@shared/types'
+import { trimTerminalOutputBuffer } from '@shared/terminalText'
 
 const SESSION_STATE_FILE = 'session-state.json'
 export const MAX_SAVED_OUTPUT_CHARS = 2 * 1024 * 1024
 
 export function trimSavedOutput(output: string, maxChars = MAX_SAVED_OUTPUT_CHARS): string {
-  if (output.length <= maxChars) return output
-  return output.slice(-maxChars)
+  // Naively re-slicing here can bisect an OSC 633;E marker that
+  // trimTerminalOutputBuffer (App.tsx's renderer-side cap) already had to
+  // widen slightly to keep intact, undoing that protection at save time.
+  return trimTerminalOutputBuffer(output, maxChars)
 }
 
 export function normalizeSessionState(snapshot: SaveSessionStateRequest): SessionStateSnapshot {

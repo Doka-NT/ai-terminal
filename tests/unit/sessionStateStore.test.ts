@@ -16,6 +16,15 @@ describe('session state helpers', () => {
     expect(trimSavedOutput(output)).toBe(`${'a'.repeat(MAX_SAVED_OUTPUT_CHARS - 4)}tail`)
   })
 
+  it('does not bisect an OSC marker the naive cut would otherwise split', () => {
+    const marker = '\x1b]633;E;ls;NONCE\x07'
+    const output = 'x'.repeat(50) + marker + 'TAIL'
+    const maxChars = 11 // lands inside the marker's payload for a naive slice(-11)
+
+    expect(output.slice(-maxChars)).toBe(';NONCE\x07TAIL')
+    expect(trimSavedOutput(output, maxChars)).toBe(marker + 'TAIL')
+  })
+
   it('drops assistant threads for sessions that are no longer open', () => {
     const snapshot = normalizeSessionState({
       version: 1,
@@ -112,5 +121,26 @@ describe('session state helpers', () => {
     })
 
     expect(snapshot.sessions[0].reconnectCommand).toBe('ssh artem@cloud-vm')
+  })
+
+  it('preserves a local shell integration nonce for trusted transcript restore', () => {
+    const snapshot = normalizeSessionState({
+      version: 1,
+      savedAt: '2026-05-03T00:00:00.000Z',
+      activeSessionId: 'local-tab',
+      sessions: [{
+        id: 'local-tab',
+        kind: 'local',
+        label: 'zsh',
+        command: '/bin/zsh',
+        createdAt: 1,
+        shellIntegrationNonce: 'saved-nonce',
+        status: 'running',
+        output: '\x1b]633;E;pwd;saved-nonce\x07'
+      }],
+      assistantThreads: {}
+    })
+
+    expect(snapshot.sessions[0].shellIntegrationNonce).toBe('saved-nonce')
   })
 })

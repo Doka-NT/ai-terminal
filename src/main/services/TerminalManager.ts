@@ -1,23 +1,32 @@
 // SPDX-License-Identifier: MPL-2.0
 import type { BrowserWindow } from 'electron'
 import { execFile } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 import pty from 'node-pty'
-import type { CreateSshCommandRequest, CreateTerminalRequest, SSHProfile, TerminalCommandEvent, TerminalSessionInfo } from '@shared/types'
+import type { CreateSshCommandRequest, CreateTerminalRequest, SSHProfile, TerminalSessionInfo } from '@shared/types'
 import { buildSshCommand, parseSshCommand, parseSshCommandTarget } from '@main/utils/ssh'
 import { resolveExistingCwd } from '@main/utils/cwd'
+import { decodeShellIntegrationCommand } from '@shared/terminalText'
 
 const execFileAsync = promisify(execFile)
 
-// OSC marker emitted by shell hook on every prompt
-const PROMPT_OSC = '\x1b]6973;PROMPT\x07'
-const COMMAND_OSC_PREFIX = '\x1b]6973;COMMAND;'
-const AIT_OSC_PREFIX = '\x1b]6973;'
 const OSC_END = '\x07'
+// Legacy 6973 prefix (stripped for defence-in-depth if old hooks remain)
+const AIT_LEGACY_PREFIX = '\x1b]6973;'
+// 633;E prefix used for display-command substitution in rewrite633E
+const OSC_633E_PREFIX = '\x1b]633;E;'
+// Broader shell-integration OSC families rewrite633E must also buffer when a
+// PTY chunk splits them mid-sequence — 133;A/B/C/D (prompt lifecycle) and
+// 633;P (cwd) carry no secret, but an unterminated fragment left in
+// outputBuffers is still plain-text OSC framing that stripAnsi can't match.
+const OSC_133_PREFIX = '\x1b]133;'
+const OSC_633_PREFIX = '\x1b]633;'
+const SHELL_INTEGRATION_OSC_PREFIXES = [OSC_133_PREFIX, OSC_633_PREFIX]
+const OSC_133_PROMPT_SEQUENCES = ['\x1b]133;A\x07', '\x1b]133;A\x1b\\']
 const ESC = String.fromCharCode(27)
 const ANSI_CSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, 'g')
 const ANSI_OSC_PATTERN = new RegExp(`${ESC}\\](?:[^${ESC}\\x07]|${ESC}(?!\\\\))*?(?:\\x07|${ESC}\\\\)`, 'g')
@@ -34,6 +43,8 @@ interface ManagedSession {
   inputLine?: string
   inputEscapeSequence?: boolean
   transientSsh?: boolean
+  osc633ERemainder?: string
+  osc133PromptRemainder?: string
   pendingCommandDisplay?: {
     written: string
     display: string
@@ -161,15 +172,13 @@ export class TerminalManager {
       }
 
       const wasSshSession = session.info.kind === 'ssh'
-      if (wasSshSession) {
-        this.emitCommand({ sessionId, command: normalizedDisplay || normalized, echoed: false })
-      } else {
-        if (normalizedDisplay && normalizedDisplay !== normalized) {
-          session.pendingCommandDisplay = {
-            written: normalized,
-            display: normalizedDisplay
-          }
+      if (normalizedDisplay && normalizedDisplay !== normalized) {
+        session.pendingCommandDisplay = {
+          written: normalized,
+          display: normalizedDisplay
         }
+      }
+      if (!wasSshSession) {
         this.captureSubmittedCommand(session, normalized)
       }
 
@@ -206,6 +215,7 @@ export class TerminalManager {
     reconnectCommand?: string
   }): TerminalSessionInfo {
     const id = randomUUID()
+    const nonce = options.kind === 'local' ? randomUUID() : undefined
     const info: TerminalSessionInfo = {
       id,
       kind: options.kind,
@@ -217,12 +227,13 @@ export class TerminalManager {
       remoteTarget: options.remoteTarget,
       reconnectCommand: options.reconnectCommand,
       command: options.command,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      shellIntegrationNonce: nonce
     }
 
-    const hookEnv = options.kind === 'local' ? buildHookEnv(options.shell) : { env: {} }
+    const hookEnv = options.kind === 'local' ? buildHookEnv(options.shell, nonce) : { env: {} }
 
-    const child = pty.spawn(options.file, options.args, {
+    const child = pty.spawn(options.file, [...options.args, ...(hookEnv.args ?? [])], {
       name: 'xterm-256color',
       cols: options.cols ?? 100,
       rows: options.rows ?? 30,
@@ -235,17 +246,12 @@ export class TerminalManager {
 
     child.onData((data) => {
       const parsed = stripTerminalMarkers(managed, data)
+      const sawSemanticPrompt = detectOsc133Prompt(managed, parsed.data)
       if (parsed.data) {
-        this.emit('terminal:data', { sessionId: id, data: parsed.data })
+        const safe = rewrite633E(managed, parsed.data)
+        this.emit('terminal:data', { sessionId: id, data: safe })
       }
-      for (const command of parsed.commands) {
-        this.emitCommand({
-          sessionId: id,
-          command: this.displayCommandForParsedMarker(managed, command),
-          echoed: true
-        })
-      }
-      if (parsed.sawPrompt || (managed.info.kind === 'ssh' && looksLikeShellPrompt(parsed.data))) {
+      if (parsed.sawPrompt || sawSemanticPrompt || (managed.info.kind === 'ssh' && looksLikeShellPrompt(parsed.data))) {
         this.restoreTransientSsh(managed)
         this.emit('terminal:prompt', { sessionId: id })
       }
@@ -323,10 +329,7 @@ export class TerminalManager {
         if (session.info.kind === 'local') {
           this.captureSubmittedCommand(session, session.inputLine ?? '')
         } else if (session.info.kind === 'ssh') {
-          const command = (session.inputLine ?? '').trim()
-          if (command) {
-            this.emitCommand({ sessionId: session.info.id, command, echoed: false })
-          }
+          // SSH block command text handled by shell 633;E hooks if available
         }
         session.inputLine = ''
       } else if (char === '\x7f' || char === '\b') {
@@ -412,64 +415,221 @@ export class TerminalManager {
     this.getWindow()?.webContents.send(channel, payload)
   }
 
-  private emitCommand(payload: TerminalCommandEvent): void {
-    this.emit('terminal:command', payload)
-  }
 }
 
 interface HookEnv {
   env: Record<string, string>
   zdotdir?: string
+  args?: string[]
 }
 
-function buildHookEnv(shell: string | undefined): HookEnv {
+export function buildHookEnv(shell: string | undefined, nonce: string | undefined): HookEnv {
   const shellName = shell?.split('/').at(-1) ?? ''
 
   if (shellName === 'bash') {
-    const existing = process.env.PROMPT_COMMAND ? `; ${process.env.PROMPT_COMMAND}` : ''
-    return {
-      env: { PROMPT_COMMAND: `printf "\\033]6973;PROMPT\\007"${existing}` }
-    }
+    return buildBashHookEnv(nonce)
   }
 
   if (shellName === 'zsh') {
-    const home = process.env.HOME ?? homedir()
-    const realZdotdir = process.env.ZDOTDIR ?? home
-    const realZdotdirLiteral = zshSingleQuoted(realZdotdir)
-
-    const tmpDir = mkdtempSync(join(tmpdir(), 'ait-zdotdir-'))
-
-    // .zshenv — sourced for all zsh instances (login + non-login)
-    writeFileSync(join(tmpDir, '.zshenv'), [
-      '___ait_boot_zdotdir="$ZDOTDIR"',
-      `___ait_user_zdotdir=${realZdotdirLiteral}`,
-      'ZDOTDIR="$___ait_user_zdotdir"',
-      '[ -f "$ZDOTDIR/.zshenv" ] && source "$ZDOTDIR/.zshenv" 2>/dev/null',
-      '___ait_user_zdotdir="$ZDOTDIR"',
-      'ZDOTDIR="$___ait_boot_zdotdir"',
-      'export ___AIT_USER_ZDOTDIR="$___ait_user_zdotdir"'
-    ].join('\n') + '\n')
-
-    // .zshrc — let user's rc see their real ZDOTDIR, then add hook AFTER it.
-    writeFileSync(join(tmpDir, '.zshrc'), [
-      `___ait_default_zdotdir=${realZdotdirLiteral}`,
-      'ZDOTDIR="${___AIT_USER_ZDOTDIR:-$___ait_default_zdotdir}"',
-      'HISTFILE="${ZDOTDIR:-$HOME}/.zsh_history"',
-      '[ -f "$ZDOTDIR/.zshrc" ] && source "$ZDOTDIR/.zshrc" 2>/dev/null',
-      'fc -R "$HISTFILE" 2>/dev/null || true',
-      'unset ZSH_AUTOSUGGEST_USE_ASYNC',
-      '___ait_precmd() { printf "\\033]6973;PROMPT\\007"; }',
-      '___ait_preexec() { printf "\\033]6973;COMMAND;%s\\007" "$1"; }',
-      'precmd_functions+=(___ait_precmd)',
-      'preexec_functions+=(___ait_preexec)',
-      'unset ___AIT_USER_ZDOTDIR ___ait_boot_zdotdir ___ait_default_zdotdir ___ait_user_zdotdir'
-    ].join('\n') + '\n')
-
-    return { env: { ZDOTDIR: tmpDir }, zdotdir: tmpDir }
+    return buildZshHookEnv(nonce)
   }
 
-  // Unknown shell: fall back to env-based PROMPT_COMMAND (works for some shells)
+  if (shellName === 'fish') {
+    return buildFishHookEnv(nonce)
+  }
+
+  // Unknown shell: no shell integration
   return { env: {} }
+}
+
+function buildBashHookEnv(nonce: string | undefined): HookEnv {
+  const home = process.env.HOME ?? homedir()
+  const nonceLit = (nonce ?? '').replace(/'/g, "'\\''")
+  const homeLit = home.replace(/'/g, "'\\''")
+
+  // bash --init-file: sources this file instead of ~/.bashrc for interactive shells.
+  // Install once, source the user's rc files, then layer OSC 133/633 hooks over
+  // the prompt state that bash actually has after startup.
+  const tmpDir = mkdtempSync(join(tmpdir(), 'ait-bash-'))
+  const initFile = join(tmpDir, 'bash_init')
+  const initContent = [
+    'if [[ ${___ait_si_installed:-0} == 1 ]]; then',
+    '  return 0 2>/dev/null || exit 0',
+    'fi',
+    '___ait_si_installed=1',
+    '[ -f /etc/bash.bashrc ] && source /etc/bash.bashrc',
+    `___ait_si_user_bashrc='${homeLit}/.bashrc'`,
+    '[ -f "$___ait_si_user_bashrc" ] && source "$___ait_si_user_bashrc"',
+    'if [[ ${PS1+x} ]]; then',
+    '  ___ait_si_user_ps1=$PS1',
+    'else',
+    "  ___ait_si_user_ps1='\\$ '",
+    'fi',
+    '___ait_si_user_ps0=${PS0-}',
+    '___ait_si_precmd() {',
+    '  local _ec=$?',
+    '  ___ait_si_captured_this_cycle=0',
+    '  printf \'\\033]133;D;%s\\007\' "$_ec"',
+    '  printf \'\\033]633;P;Cwd=%s\\007\' "$PWD"',
+    '  return "$_ec"',
+    '}',
+    'if declare -p PROMPT_COMMAND 2>/dev/null | grep -q \'^declare -a\'; then',
+    '  PROMPT_COMMAND=(___ait_si_precmd "${PROMPT_COMMAND[@]}")',
+    'else',
+    '  ___ait_si_user_prompt_command=${PROMPT_COMMAND-}',
+    "  PROMPT_COMMAND='___ait_si_precmd'",
+    '  if [[ -n $___ait_si_user_prompt_command ]]; then',
+    "    PROMPT_COMMAND+='; '",
+    '    PROMPT_COMMAND+=$___ait_si_user_prompt_command',
+    '  fi',
+    'fi',
+    "PS1='\\[\\e]133;A\\a\\]'\"$___ait_si_user_ps1\"'\\[\\e]133;B\\a\\]'",
+    // PS0 no longer carries our hook — only the user's original PS0, if any.
+    // $BASH_COMMAND inside a PS0 command substitution (or even a bare
+    // parameter expansion) is NOT yet updated to the upcoming command —
+    // verified directly in bash 5.3 with a real PTY: PS0 always sees a stale
+    // value from the previous prompt cycle. PS0 fires before bash updates
+    // $BASH_COMMAND for the command that triggered it, so no expression
+    // inside PS0 can read the real command text.
+    'PS0="$___ait_si_user_ps0"',
+    // The DEBUG trap is the only mechanism that reliably sees the real
+    // upcoming command ($BASH_COMMAND is correct there). Installed last so
+    // nothing earlier in this file (which doesn't match the ___ait_si_*
+    // guard below) fires it first and consumes the once-per-cycle capture.
+    // Known limitation: only the first simple command of a compound line
+    // (`a && b`) is captured, matching $BASH_COMMAND's own per-simple-command
+    // granularity; a user's own additional PROMPT_COMMAND entries chained
+    // after ours can occasionally consume this cycle's capture before the
+    // real next command runs.
+    '___ait_si_captured_this_cycle=0',
+    '___ait_si_debug_hook() {',
+    '  case "$BASH_COMMAND" in',
+    '    ___ait_si_*) return ;;',
+    '  esac',
+    '  [[ $___ait_si_captured_this_cycle == 1 ]] && return',
+    '  ___ait_si_captured_this_cycle=1',
+    '  local _c="$BASH_COMMAND" _e',
+    '  _e="${_c//\\\\/\\\\\\\\}"',
+    '  _e="${_e//;/\\x3b}"',
+    "  _e=\"${_e//$'\\n'/\\x0a}\"",
+    "  _e=\"${_e//$'\\r'/\\x0d}\"",
+    `  printf '\\033]633;E;%s;%s\\007\\033]133;C\\007' "$_e" '${nonceLit}'`,
+    '}',
+    "trap '___ait_si_debug_hook' DEBUG"
+  ].join('\n')
+  writeFileSync(initFile, initContent + '\n')
+
+  return {
+    env: {},
+    args: ['--init-file', initFile],
+    zdotdir: tmpDir
+  }
+}
+
+function buildZshHookEnv(nonce: string | undefined): HookEnv {
+  const home = process.env.HOME ?? homedir()
+  const realZdotdir = process.env.ZDOTDIR ?? home
+  const realZdotdirLiteral = zshSingleQuoted(realZdotdir)
+  const nonceLiteral = nonce ? zshSingleQuoted(nonce) : "''"
+
+  const tmpDir = mkdtempSync(join(tmpdir(), 'ait-zdotdir-'))
+
+  // .zshenv — sourced for all zsh instances (login + non-login)
+  writeFileSync(join(tmpDir, '.zshenv'), [
+    '___ait_boot_zdotdir="$ZDOTDIR"',
+    `___ait_user_zdotdir=${realZdotdirLiteral}`,
+    'ZDOTDIR="$___ait_user_zdotdir"',
+    '[ -f "$ZDOTDIR/.zshenv" ] && source "$ZDOTDIR/.zshenv" 2>/dev/null',
+    '___ait_user_zdotdir="$ZDOTDIR"',
+    'ZDOTDIR="$___ait_boot_zdotdir"',
+    'export ___AIT_USER_ZDOTDIR="$___ait_user_zdotdir"'
+  ].join('\n') + '\n')
+
+  // .zshrc — source user's rc first, then append our hooks so they run last.
+  // The OSC 133/633 hooks run after theme managers (oh-my-zsh, starship, etc.)
+  // that register their own precmd/preexec via precmd_functions.
+  writeFileSync(join(tmpDir, '.zshrc'), [
+    `___ait_default_zdotdir=${realZdotdirLiteral}`,
+    'ZDOTDIR="${___AIT_USER_ZDOTDIR:-$___ait_default_zdotdir}"',
+    'HISTFILE="${ZDOTDIR:-$HOME}/.zsh_history"',
+    '[ -f "$ZDOTDIR/.zshrc" ] && source "$ZDOTDIR/.zshrc" 2>/dev/null',
+    'fc -R "$HISTFILE" 2>/dev/null || true',
+    'unset ZSH_AUTOSUGGEST_USE_ASYNC',
+    // OSC 133/633 hooks (appended after theme hooks so they run last in precmd)
+    `___ait_si_nonce=${nonceLiteral}`,
+    // precmd: close previous block (133;D), update cwd (633;P), mark prompt start
+    // (133;A via printf before PROMPT renders), append 133;B to end of PROMPT for
+    // command-start marker. Re-appends each time so theme resets are handled.
+    '___ait_si_precmd() {',
+    '  printf "\\033]133;D;%d\\007" "$?"',
+    '  printf "\\033]633;P;Cwd=%s\\007" "$PWD"',
+    '  printf "\\033]133;A\\007"',
+    // Append 133;B to PROMPT only if not already present; strip stale copy first
+    "  local _ait_b=$'\\e]133;B\\a'",
+    '  PROMPT="${PROMPT//%{$_ait_b%}/}"',
+    '  PROMPT="${PROMPT}%{$_ait_b%}"',
+    '}',
+    // preexec: emit command text (633;E with nonce) + output start (133;C)
+    '___ait_si_preexec() {',
+    '  local _ait_cmd="$1"',
+    // Escape: \ -> \\, ; -> \x3b, newline -> \x0a, CR -> \x0d
+    '  local _ait_esc="${_ait_cmd//\\\\/\\\\\\\\}"',
+    '  _ait_esc="${_ait_esc//;/\\\\x3b}"',
+    "  _ait_esc=\"${_ait_esc//$'\\n'/\\\\x0a}\"",
+    "  _ait_esc=\"${_ait_esc//$'\\r'/\\\\x0d}\"",
+    '  printf "\\033]633;E;%s;%s\\007" "$_ait_esc" "$___ait_si_nonce"',
+    '  printf "\\033]133;C\\007"',
+    '}',
+    'precmd_functions+=(___ait_si_precmd)',
+    'preexec_functions+=(___ait_si_preexec)',
+    'unset ___AIT_USER_ZDOTDIR ___ait_boot_zdotdir ___ait_default_zdotdir ___ait_user_zdotdir'
+  ].join('\n') + '\n')
+
+  return { env: { ZDOTDIR: tmpDir }, zdotdir: tmpDir }
+}
+
+function buildFishHookEnv(nonce: string | undefined): HookEnv {
+  // Run the generated hook after fish has loaded its normal conf.d and
+  // config.fish files. This keeps the user's XDG_CONFIG_HOME unchanged for
+  // both startup configuration and every child process launched by fish.
+  const tmpDir = mkdtempSync(join(tmpdir(), 'ait-fish-'))
+  const confDPath = join(tmpDir, 'fish', 'conf.d')
+  try { mkdirSync(confDPath, { recursive: true }) } catch { /* ignore */ }
+
+  const nonceLiteral = nonce ? fishQuoted(nonce) : "''"
+  const hooks = [
+    'function __ait_si_fish_prompt --on-event fish_prompt',
+    '  printf "\\033]133;D;%d\\007" "$__ait_si_last_status"',
+    '  printf "\\033]633;P;Cwd=%s\\007" "$PWD"',
+    '  printf "\\033]133;A\\007"',
+    'end',
+    'function __ait_si_fish_preexec --on-event fish_preexec',
+    `  set -l _ait_nonce ${nonceLiteral}`,
+    // Escape order: backslash first, then delimiters — fish double-quotes: \\ → \
+    '  set -l _ait_esc (string replace --all -- "\\\\" "\\\\\\\\" -- $argv[1])',
+    '  set _ait_esc (string replace --all -- ";" "\\x3b" -- $_ait_esc)',
+    '  set _ait_esc (string replace --all -- "\\n" "\\x0a" -- $_ait_esc)',
+    '  set _ait_esc (string replace --all -- "\\r" "\\x0d" -- $_ait_esc)',
+    '  printf "\\033]633;E;%s;%s\\007" "$_ait_esc" "$_ait_nonce"',
+    '  printf "\\033]133;C\\007"',
+    'end',
+    'function __ait_si_fish_postexec --on-event fish_postexec',
+    '  set -g __ait_si_last_status $status',
+    'end'
+  ].join('\n')
+
+  const hookFile = join(confDPath, 'taviraq.fish')
+  writeFileSync(hookFile, hooks + '\n')
+  return {
+    env: {},
+    args: ['-C', `source ${fishQuoted(hookFile)}`],
+    zdotdir: tmpDir
+  }
+}
+
+
+function fishQuoted(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
 }
 
 function zshSingleQuoted(value: string): string {
@@ -512,68 +672,141 @@ function isUtf8Locale(value: string | undefined): boolean {
   return Boolean(value && /utf-?8/i.test(value))
 }
 
+// Strip any remaining legacy 6973 markers (defence-in-depth: hooks in old shell configs).
+// Returns cleaned data and whether a 6973;PROMPT was seen (for SSH heuristic).
 function stripTerminalMarkers(
   session: ManagedSession,
   data: string
-): { data: string; sawPrompt: boolean; commands: string[] } {
+): { data: string; sawPrompt: boolean } {
   let input = `${session.promptMarkerRemainder ?? ''}${data}`
   let clean = ''
   let sawPrompt = false
-  const commands: string[] = []
 
   while (true) {
-    const markerIndex = input.indexOf(AIT_OSC_PREFIX)
-    if (markerIndex === -1) {
+    const idx = input.indexOf(AIT_LEGACY_PREFIX)
+    if (idx === -1) break
+
+    clean += input.slice(0, idx)
+    input = input.slice(idx + AIT_LEGACY_PREFIX.length)
+
+    // Find end of the OSC sequence
+    const end = input.indexOf(OSC_END)
+    if (end === -1) {
+      session.promptMarkerRemainder = AIT_LEGACY_PREFIX + input
+      return { data: clean, sawPrompt }
+    }
+    const body = input.slice(0, end)
+    if (body === 'PROMPT') sawPrompt = true
+    input = input.slice(end + OSC_END.length)
+  }
+
+  // Buffer trailing partial legacy prefix for next chunk
+  const maxPfx = AIT_LEGACY_PREFIX.length - 1
+  const tailLen = Math.min(input.length, maxPfx)
+  let remainder = 0
+  for (let l = tailLen; l > 0; l--) {
+    if (AIT_LEGACY_PREFIX.startsWith(input.slice(-l))) { remainder = l; break }
+  }
+  clean += input.slice(0, input.length - remainder)
+  session.promptMarkerRemainder = remainder > 0 ? input.slice(-remainder) : undefined
+
+  return { data: clean, sawPrompt }
+}
+
+// Rewrite 633;E sequences so display commands with [[TAVIRAQ_SECRET_*]] placeholders
+// are not exposed to the renderer. Uses session.pendingCommandDisplay set by runConfirmed.
+export function rewrite633E(session: ManagedSession, data: string): string {
+  const remainder = session.osc633ERemainder
+  // Fast path: nothing pending from a prior chunk, and this chunk contains no
+  // full or trailing-partial shell-integration OSC prefix to buffer. A
+  // partial prefix must still be buffered even with no secret substitution
+  // pending — otherwise an unterminated OSC fragment (633;E carrying the
+  // nonce, or 133;*/633;P framing) can sit in outputBuffers where stripAnsi
+  // can't recognize it as an OSC sequence and it reaches provider context
+  // as plain text.
+  const hasFullIntroducer = SHELL_INTEGRATION_OSC_PREFIXES.some((prefix) => data.indexOf(prefix) !== -1)
+  const hasPartialPrefix = SHELL_INTEGRATION_OSC_PREFIXES.some((prefix) => trailingPrefixLength(data, prefix) > 0)
+  if (!remainder && !hasFullIntroducer && !hasPartialPrefix) {
+    return data
+  }
+
+  let input = `${remainder ?? ''}${data}`
+  let output = ''
+  session.osc633ERemainder = undefined
+
+  while (true) {
+    const idx133 = input.indexOf(OSC_133_PREFIX)
+    const idx633 = input.indexOf(OSC_633_PREFIX)
+    const idx = idx133 === -1 ? idx633 : idx633 === -1 ? idx133 : Math.min(idx133, idx633)
+    if (idx === -1) {
+      const partialPrefixLength = Math.max(
+        ...SHELL_INTEGRATION_OSC_PREFIXES.map((prefix) => trailingPrefixLength(input, prefix))
+      )
+      output += input.slice(0, input.length - partialPrefixLength)
+      session.osc633ERemainder = partialPrefixLength > 0
+        ? input.slice(-partialPrefixLength)
+        : undefined
       break
     }
 
-    clean += input.slice(0, markerIndex)
-    input = input.slice(markerIndex)
+    output += input.slice(0, idx)
+    const isCommandMarker = input.startsWith(OSC_633E_PREFIX, idx)
+    const matchedPrefix = isCommandMarker ? OSC_633E_PREFIX : idx === idx633 ? OSC_633_PREFIX : OSC_133_PREFIX
+    const rest = input.slice(idx + matchedPrefix.length)
 
-    if (input.startsWith(PROMPT_OSC)) {
-      input = input.slice(PROMPT_OSC.length)
-      sawPrompt = true
+    const endBel = rest.indexOf('\x07')
+    const endSt = rest.indexOf('\x1b\\')
+    const endIdx = endBel === -1 ? endSt : endSt === -1 ? endBel : Math.min(endBel, endSt)
+    if (endIdx === -1) {
+      // Keep the incomplete sequence in main until xterm's OSC terminator arrives.
+      session.osc633ERemainder = input.slice(idx)
+      break
+    }
+    const term = rest[endIdx] === '\x07' ? '\x07' : '\x1b\\'
+    const payload = rest.slice(0, endIdx)
+    input = rest.slice(endIdx + term.length)
+
+    if (!isCommandMarker) {
+      output += `${matchedPrefix}${payload}${term}`
       continue
     }
 
-    if (input.startsWith(COMMAND_OSC_PREFIX)) {
-      const endIndex = input.indexOf(OSC_END, COMMAND_OSC_PREFIX.length)
-      if (endIndex === -1) {
-        session.promptMarkerRemainder = input
-        return { data: clean, sawPrompt, commands }
-      }
-      const command = input.slice(COMMAND_OSC_PREFIX.length, endIndex).trim()
-      if (command) {
-        commands.push(command)
-      }
-      input = input.slice(endIndex + OSC_END.length)
-      continue
-    }
+    const lastSemi = payload.lastIndexOf(';')
+    const nonce = lastSemi !== -1 ? payload.slice(lastSemi + 1) : ''
+    const escapedCmd = lastSemi !== -1 ? payload.slice(0, lastSemi) : payload
+    const rawCmd = decodeShellIntegrationCommand(escapedCmd).trim()
 
-    clean += input[0]
-    input = input.slice(1)
+    if (session.pendingCommandDisplay?.written === rawCmd) {
+      const display = session.pendingCommandDisplay.display
+      session.pendingCommandDisplay = undefined
+      const safeEscaped = display
+        .replace(/\\/g, '\\\\').replace(/;/g, '\\x3b')
+        .replace(/\r/g, '\\x0d').replace(/\n/g, '\\x0a')
+      output += `${OSC_633E_PREFIX}${safeEscaped};${nonce}${term}`
+    } else {
+      output += `${OSC_633E_PREFIX}${payload}${term}`
+    }
   }
 
-  const remainderLength = longestTerminalMarkerPrefixAtEnd(input)
-  const completeLength = input.length - remainderLength
-  clean += input.slice(0, completeLength)
-  session.promptMarkerRemainder = remainderLength > 0 ? input.slice(completeLength) : undefined
-
-  return { data: clean, sawPrompt, commands }
+  return output
 }
 
-function longestTerminalMarkerPrefixAtEnd(value: string): number {
-  const candidates = [PROMPT_OSC, COMMAND_OSC_PREFIX]
-  const maxLength = Math.min(value.length, Math.max(...candidates.map((candidate) => candidate.length - 1)))
-
+function trailingPrefixLength(value: string, prefix: string): number {
+  const maxLength = Math.min(value.length, prefix.length - 1)
   for (let length = maxLength; length > 0; length -= 1) {
-    const suffix = value.slice(-length)
-    if (candidates.some((candidate) => candidate.startsWith(suffix))) {
-      return length
-    }
+    if (prefix.startsWith(value.slice(-length))) return length
   }
-
   return 0
+}
+
+export function detectOsc133Prompt(session: ManagedSession, data: string): boolean {
+  const input = `${session.osc133PromptRemainder ?? ''}${data}`
+  const sawPrompt = OSC_133_PROMPT_SEQUENCES.some((sequence) => input.includes(sequence))
+  const remainderLength = Math.max(
+    ...OSC_133_PROMPT_SEQUENCES.map((sequence) => trailingPrefixLength(input, sequence))
+  )
+  session.osc133PromptRemainder = remainderLength > 0 ? input.slice(-remainderLength) : undefined
+  return sawPrompt
 }
 
 export function looksLikeShellPrompt(data: string): boolean {
