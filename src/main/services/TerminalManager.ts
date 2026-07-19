@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 import pty from 'node-pty'
 import type { CreateSshCommandRequest, CreateTerminalRequest, SSHProfile, TerminalCommandEvent, TerminalSessionInfo } from '@shared/types'
-import { buildSshCommand, parseSshCommand, parseSshCommandTarget } from '@main/utils/ssh'
+import { buildSshCommand, parseSshCommand } from '@main/utils/ssh'
 import { resolveExistingCwd } from '@main/utils/cwd'
 
 const execFileAsync = promisify(execFile)
@@ -33,7 +33,6 @@ interface ManagedSession {
   promptMarkerRemainder?: string
   inputLine?: string
   inputEscapeSequence?: boolean
-  transientSsh?: boolean
   pendingCommandDisplay?: {
     written: string
     display: string
@@ -160,8 +159,7 @@ export class TerminalManager {
         return
       }
 
-      const wasSshSession = session.info.kind === 'ssh'
-      if (wasSshSession) {
+      if (session.info.kind === 'ssh') {
         this.emitCommand({ sessionId, command: normalizedDisplay || normalized, echoed: false })
       } else {
         if (normalizedDisplay && normalizedDisplay !== normalized) {
@@ -170,14 +168,9 @@ export class TerminalManager {
             display: normalizedDisplay
           }
         }
-        this.captureSubmittedCommand(session, normalized)
       }
 
-      if (wasSshSession) {
-        session.pty.write(`${normalized}\r`)
-      } else {
-        session.pty.write(`${normalized}\r`)
-      }
+      session.pty.write(`${normalized}\r`)
     }
 
     if (hadPendingInput) {
@@ -246,7 +239,6 @@ export class TerminalManager {
         })
       }
       if (parsed.sawPrompt || (managed.info.kind === 'ssh' && looksLikeShellPrompt(parsed.data))) {
-        this.restoreTransientSsh(managed)
         this.emit('terminal:prompt', { sessionId: id })
       }
     })
@@ -278,10 +270,7 @@ export class TerminalManager {
   }
 
   private async refreshLocalSession(sessionId: string): Promise<void> {
-    await Promise.all([
-      this.refreshCwd(sessionId),
-      this.refreshSshChild(sessionId)
-    ])
+    await this.refreshCwd(sessionId)
   }
 
   private async refreshCwd(sessionId: string): Promise<void> {
@@ -297,19 +286,6 @@ export class TerminalManager {
     }
   }
 
-  private async refreshSshChild(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session || !session.info.localLabel) {
-      return
-    }
-
-    const parsed = await readSshDescendant(session.pty.pid)
-    if (parsed) {
-      this.updateTransientSsh(session, parsed)
-      session.info.reconnectCommand = parsed.command
-    }
-  }
-
   private trackInput(session: ManagedSession, data: string): void {
     for (const char of data) {
       if (session.inputEscapeSequence) {
@@ -320,9 +296,7 @@ export class TerminalManager {
         session.inputLine = ''
         session.inputEscapeSequence = true
       } else if (char === '\r' || char === '\n') {
-        if (session.info.kind === 'local') {
-          this.captureSubmittedCommand(session, session.inputLine ?? '')
-        } else if (session.info.kind === 'ssh') {
+        if (session.info.kind === 'ssh') {
           const command = (session.inputLine ?? '').trim()
           if (command) {
             this.emitCommand({ sessionId: session.info.id, command, echoed: false })
@@ -349,16 +323,6 @@ export class TerminalManager {
     return true
   }
 
-  private captureSubmittedCommand(session: ManagedSession, command: string): void {
-    const parsed = parseSshCommandTarget(command)
-    if (!parsed) {
-      return
-    }
-
-    this.updateTransientSsh(session, parsed)
-    session.info.reconnectCommand = command
-  }
-
   private displayCommandForParsedMarker(session: ManagedSession, command: string): string {
     const pending = session.pendingCommandDisplay
     if (!pending || pending.written !== command.trim()) {
@@ -367,36 +331,6 @@ export class TerminalManager {
 
     session.pendingCommandDisplay = undefined
     return pending.display
-  }
-
-  private updateTransientSsh(session: ManagedSession, parsed: { remoteHost: string; remoteTarget: string }): void {
-    const changed = session.info.kind !== 'ssh' ||
-      session.info.label !== parsed.remoteTarget ||
-      session.info.remoteHost !== parsed.remoteHost ||
-      session.info.remoteTarget !== parsed.remoteTarget
-
-    session.info.kind = 'ssh'
-    session.info.label = parsed.remoteTarget
-    session.info.remoteHost = parsed.remoteHost
-    session.info.remoteTarget = parsed.remoteTarget
-    session.transientSsh = true
-
-    if (changed) {
-      this.emit('terminal:session', session.info)
-    }
-  }
-
-  private restoreTransientSsh(session: ManagedSession): void {
-    if (!session.transientSsh) {
-      return
-    }
-
-    session.transientSsh = false
-    session.info.kind = 'local'
-    session.info.label = session.info.localLabel ?? session.info.shell?.split('/').at(-1) ?? 'shell'
-    session.info.remoteHost = undefined
-    session.info.remoteTarget = undefined
-    this.emit('terminal:session', session.info)
   }
 
   private requireSession(sessionId: string): ManagedSession {
@@ -751,58 +685,4 @@ async function readProcessCwd(pid: number): Promise<string | undefined> {
   }
 
   return undefined
-}
-
-interface ProcessInfo {
-  pid: number
-  ppid: number
-  command: string
-}
-
-async function readSshDescendant(rootPid: number): Promise<{ remoteHost: string; remoteTarget: string; command: string } | undefined> {
-  if (process.platform !== 'darwin' && process.platform !== 'linux') {
-    return undefined
-  }
-
-  try {
-    const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid=,command='])
-    const processes = stdout
-      .split('\n')
-      .map(parseProcessLine)
-      .filter((process): process is ProcessInfo => Boolean(process))
-
-    const childrenByParent = new Map<number, ProcessInfo[]>()
-    for (const process of processes) {
-      const children = childrenByParent.get(process.ppid) ?? []
-      children.push(process)
-      childrenByParent.set(process.ppid, children)
-    }
-
-    const queue = [...childrenByParent.get(rootPid) ?? []]
-    for (let index = 0; index < queue.length; index += 1) {
-      const process = queue[index]
-      const parsed = parseSshCommandTarget(process.command)
-      if (parsed) {
-        return { ...parsed, command: process.command }
-      }
-      queue.push(...childrenByParent.get(process.pid) ?? [])
-    }
-  } catch {
-    return undefined
-  }
-
-  return undefined
-}
-
-function parseProcessLine(line: string): ProcessInfo | undefined {
-  const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/)
-  if (!match) {
-    return undefined
-  }
-
-  return {
-    pid: Number(match[1]),
-    ppid: Number(match[2]),
-    command: match[3]
-  }
 }
