@@ -81,6 +81,22 @@ describe('TerminalManager.runConfirmed', () => {
     expect(writes).toEqual(['\x03', 'pwd\r'])
   })
 
+  it('keeps local sessions local when running SSH-looking confirmed commands', () => {
+    const sends: Array<{ channel: string; payload: unknown }> = []
+    const { manager, writes } = createManagerWithSession({}, undefined, sends)
+
+    manager.runConfirmed('session-1', 'ssh git@github.com')
+
+    const [session] = manager.list()
+    expect(writes).toEqual(['ssh git@github.com\r'])
+    expect(session.kind).toBe('local')
+    expect(session.label).toBe('zsh')
+    expect(session.remoteHost).toBeUndefined()
+    expect(session.remoteTarget).toBeUndefined()
+    expect(session.reconnectCommand).toBeUndefined()
+    expect(sends.filter((send) => send.channel === 'terminal:session')).toEqual([])
+  })
+
   it('writes resolved SSH commands while emitting placeholder metadata', () => {
     const sends: Array<{ channel: string; payload: unknown }> = []
     const { manager, writes } = createManagerWithSession({ kind: 'ssh' }, undefined, sends)
@@ -128,11 +144,30 @@ describe('TerminalManager.runConfirmed', () => {
 
     manager.write('session-1', 'ls -la\r')
 
+    const [session] = manager.list()
     expect(writes).toEqual(['ls -la\r'])
+    expect(session.kind).toBe('ssh')
     expect(sends).toContainEqual({
       channel: 'terminal:command',
       payload: { sessionId: 'session-1', command: 'ls -la', echoed: false }
     })
+  })
+
+  it('keeps local sessions local when typing SSH-looking commands', () => {
+    const sends: Array<{ channel: string; payload: unknown }> = []
+    const { manager, writes } = createManagerWithSession({}, undefined, sends)
+
+    manager.write('session-1', 'git fetch origin main\r')
+    manager.write('session-1', 'ssh -T git@github.com\r')
+
+    const [session] = manager.list()
+    expect(writes).toEqual(['git fetch origin main\r', 'ssh -T git@github.com\r'])
+    expect(session.kind).toBe('local')
+    expect(session.label).toBe('zsh')
+    expect(session.remoteHost).toBeUndefined()
+    expect(session.remoteTarget).toBeUndefined()
+    expect(session.reconnectCommand).toBeUndefined()
+    expect(sends.filter((send) => send.channel === 'terminal:session')).toEqual([])
   })
 })
 
