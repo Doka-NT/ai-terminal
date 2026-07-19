@@ -14,6 +14,7 @@ import type {
 } from '@shared/types'
 import type { MaskingRuleProvider } from '@main/capabilities'
 import {
+  BARE_SECRET_MAX_MATCHES,
   CUSTOM_SECRET_PATTERN_MAX_MATCHES,
   CUSTOM_SECRET_SCAN_MAX_TEXT_LENGTH,
   createDefaultSecretMaskingSettings,
@@ -289,12 +290,13 @@ export async function scanTextForSecrets(
   const supplementalFindings = findSupplementalStrictSecrets(text)
   const customFindings = findCustomPatternSecrets(text, settings)
   const providerFindings = collectProviderSecretFindings(maskingProviders, text, settings)
+  const bareEntropyFindings = findBareHighEntropySecrets(text)
   try {
     const gitleaksFindings = await runGitleaks(text, signal)
-    return [...customFindings, ...gitleaksFindings, ...supplementalFindings, ...providerFindings]
+    return [...customFindings, ...gitleaksFindings, ...supplementalFindings, ...providerFindings, ...bareEntropyFindings]
   } catch (error) {
     if (isGitleaksUnavailableError(error)) {
-      return [...customFindings, ...supplementalFindings, ...providerFindings]
+      return [...customFindings, ...supplementalFindings, ...providerFindings, ...bareEntropyFindings]
     }
     throw error
   }
@@ -386,6 +388,257 @@ export function findSupplementalStrictSecrets(text: string): SecretFinding[] {
         secret: value,
         match: match[0]
       })
+    }
+  }
+
+  // The prefix ("4/" or "1//") is a strong signal on its own, but the body still needs a
+  // sanity check: an ordinary hyphenated path segment (e.g. "docs/4/migration-guide-v2-
+  // authorization" or "docs/1//OAuth-migration-guide") also matches a run of letters,
+  // digits, "_", or "-", and a presence-of-digit-or-uppercase check (an earlier version
+  // of this guard) still passes it whenever the slug happens to contain a version number
+  // or one capitalized word. Digit/case presence isn't a reliable signal either way at
+  // short lengths -- what actually separates a real, long random base64url-ish body from
+  // a human-written slug is per-character Shannon entropy, and that measure is only
+  // statistically reliable with enough characters to average over. So this requires a
+  // longer minimum body (30, vs. the 20 used elsewhere) -- still far short of a real
+  // Google-issued code's typical length -- and rejects bodies below a bits-per-char floor
+  // empirically well below random base64url-ish text and above realistic doc slugs.
+  const oauthAuthorizationCodeRe = /\b4\/([0-9A-Za-z_-]{30,})\b/g
+  for (const match of text.matchAll(oauthAuthorizationCodeRe)) {
+    if (!looksLikeRandomOAuthBody(match[1])) continue
+    findings.push({
+      ruleId: 'taviraq-google-oauth-code',
+      description: 'Google OAuth authorization code',
+      secret: match[0],
+      match: match[0]
+    })
+  }
+
+  const oauthRefreshTokenRe = /\b1\/\/([0-9A-Za-z_-]{30,})\b/g
+  for (const match of text.matchAll(oauthRefreshTokenRe)) {
+    if (!looksLikeRandomOAuthBody(match[1])) continue
+    findings.push({
+      ruleId: 'taviraq-google-oauth-refresh-token',
+      description: 'Google OAuth refresh token',
+      secret: match[0],
+      match: match[0]
+    })
+  }
+
+  return findings
+}
+
+// Empirically calibrated: realistic doc slugs (including ones with a version number or a
+// capitalized word, e.g. "migration-guide-v2-authorization") measure ~3.7-4.05 bits/char
+// at 30+ chars; random base64url-ish text of the same length measures ~4.25-4.85 even in
+// the least favorable (punctuation-free) case. 4.15 sits in the gap with margin both ways.
+const OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR = 4.15
+
+function looksLikeRandomOAuthBody(value: string): boolean {
+  return shannonEntropyBitsPerChar(value) >= OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR
+}
+
+function shannonEntropyBitsPerChar(value: string): number {
+  if (!value.length) return 0
+
+  const counts = new Map<string, number>()
+  for (const char of value) counts.set(char, (counts.get(char) ?? 0) + 1)
+
+  let entropy = 0
+  for (const count of counts.values()) {
+    const probability = count / value.length
+    entropy -= probability * Math.log2(probability)
+  }
+  return entropy
+}
+
+const INTEGRITY_HASH_PREFIX_RE = /^sha(?:1|256|384|512)-/i
+// Split (not \b-matchAll) on purpose: \b is defined relative to \w, which does not
+// include several chars this charset allows (e.g. "/"). Matching with \b would drop a
+// leading "/" from an absolute path, defeating isLikelyFilesystemPath() below.
+// "=" is deliberately NOT part of the kept charset: unlike the rest of this set, it
+// shows up in real text as a KEY=VALUE delimiter, not just inside a token, and keeping
+// it would glue an assignment's identifier onto its value into one over-broad match
+// (e.g. "API_KEY=abc..." masked whole instead of just "abc..."). Real base64 padding
+// is at most the last couple of characters of a secret, so treating "=" as a
+// delimiter only costs those trailing characters, not the secret itself.
+// "!", "#", "$", "%" ARE kept: a bare-pasted password using typical complexity-rule
+// special characters (e.g. "XyZ9!aBcD3#eFgH4$jKlM5%nOpQ6") would otherwise be shattered
+// into short fragments at each of those characters, none reaching the length floor
+// below -- so the real secret would never even reach the entropy check. Unlike "=",
+// none of these four commonly delimit two distinct semantic units in ordinary text.
+const BARE_ENTROPY_TOKEN_SPLIT_RE = /[^A-Za-z0-9._~+/!#$%-]+/
+// isLikelyFilesystemPath() (used inside looksHighEntropy) only rejects absolute paths,
+// so a relative path or a versioned filename -- "dist/bundle-2024-final.js",
+// "node-v20.10.0-darwin-arm64.tar.gz" -- keeps its digit + "-"/"." punctuation and reads
+// as high entropy. Scoped to this bare-entropy fallback only (not looksHighEntropy
+// itself) so keyword-gated call sites keep their existing, already-shipped behavior.
+// Includes common PKI/certificate & key-material extensions (pem, key, crt, cer, p12,
+// pfx, csr, der): a filename like "service-account-production-2024.pem" would otherwise
+// mix digits with "-"/"." punctuation and pass looksHighEntropy(), masking the exact
+// filename a user is asking about even though the file's actual contents are what
+// matters, not its name.
+const COMMON_FILE_EXTENSION_RE =
+  /\.(?:js|jsx|ts|tsx|mjs|cjs|json|md|txt|csv|ya?ml|lock|log|map|css|scss|less|html?|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|sh|bash|zsh|zip|tar|gz|tgz|bz2|xz|7z|rar|dmg|exe|app|pkg|deb|rpm|png|jpe?g|gif|svg|ico|pdf|wasm|woff2?|ttf|eot|mp3|mp4|mov|wav|pem|key|crt|cer|p12|pfx|csr|der)$/i
+
+function looksLikeFilename(value: string): boolean {
+  return COMMON_FILE_EXTENSION_RE.test(value)
+}
+
+function looksLikeExtensionlessRelativePath(value: string): boolean {
+  if (!value.includes('/') || isLikelyFilesystemPath(value)) return false
+
+  // filter(Boolean) drops empty segments from a doubled separator (e.g. the "//" in
+  // "docs/1//migration-guide"): a route with a double slash is still a route, not a
+  // reason to fall through to looksHighEntropy() below.
+  const segments = value.split('/').filter(Boolean)
+  if (segments.length === 0) return false
+  if (segments.some((segment) => !/^[A-Za-z0-9._-]+$/.test(segment))) return false
+
+  // Human-readable routes can satisfy looksHighEntropy() through digits and path
+  // punctuation alone. Keep genuinely random slash-bearing tokens eligible by only
+  // rejecting path-shaped values below the same entropy floor used for OAuth slugs.
+  return shannonEntropyBitsPerChar(value) < OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR
+}
+
+// Extensionless, slash-free versioned artifact/platform names -- "node-v20.10.0-darwin-
+// arm64", "x86_64-apple-darwin23.4.0" -- pass both looksLikeFilename() (no extension) and
+// isLikelyFilesystemPath() (no leading separator), and looksHighEntropy() accepts them
+// because they mix digits with "-"/"." punctuation. A Shannon-entropy threshold doesn't
+// reliably separate these from a real short secret either: at this length the two
+// populations are only ~0.05 bits/char apart, well within normal sampling noise. What
+// does reliably separate them is structure: a real secret is essentially never going to
+// contain a dotted run of 1-4 digit groups that reads as a version number, since that is
+// a very specific, low-probability shape for genuinely random text to produce by chance.
+const VERSION_NUMBER_RE = /\b\d{1,4}(?:\.\d{1,4}){1,3}\b/
+
+function looksLikeVersionedArtifactName(value: string): boolean {
+  return VERSION_NUMBER_RE.test(value)
+}
+
+// A DNS hostname (internal EC2/RDS-style names included) has no recognized file
+// extension and no path separator, so it skips every guard above; looksHighEntropy()
+// then accepts it for mixing digits with "."/"-" punctuation. Entropy alone does not
+// reliably reject these: a hostname can legitimately contain a randomly-generated cloud
+// resource-id label (e.g. an RDS instance identifier), which measures high enough to sit
+// above the same threshold used for OAuth bodies. What is reliable is DNS label syntax
+// itself: each dot-separated label must be short (real hostname labels are practically
+// always well under this) and match RFC 1035 label shape (alphanumeric, interior hyphens
+// only). A JWT's dot-separated segments are long base64url blobs and fail the length
+// check, so this does not suppress JWT-shaped bare secrets.
+const HOSTNAME_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
+const MAX_HOSTNAME_LABEL_LENGTH = 30
+
+function looksLikeHostname(value: string): boolean {
+  if (!value.includes('.')) return false
+
+  const labels = value.split('.')
+  if (labels.length < 2) return false
+
+  return labels.every((label) => label.length > 0 && label.length <= MAX_HOSTNAME_LABEL_LENGTH && HOSTNAME_LABEL_RE.test(label))
+}
+
+// A slash-free, dot-free hyphenated slug ("migration-guide-v2-authorization") passes
+// every guard above and only has hyphen/digit punctuation for looksHighEntropy() to key
+// off. Reusing the same threshold validated for OAuth bodies requires the same 30-char
+// floor for the estimate to be meaningful; below that, entropy alone doesn't reliably
+// separate a slug from a real short secret (see looksLikeKubernetesResourceName below for
+// the shorter, structurally-distinct case this doesn't cover).
+function looksLikeLowEntropySlug(value: string): boolean {
+  return value.length >= 30 && shannonEntropyBitsPerChar(value) < OAUTH_BODY_MIN_ENTROPY_BITS_PER_CHAR
+}
+
+// Kubernetes generates pod names as "<deployment>-<replicaset-hash>-<pod-hash>", where
+// the hashes are near-random-looking lowercase alphanumeric runs of a fixed length --
+// exactly the shape that pushes Shannon entropy up close to (sometimes above) a real
+// secret's range, unlike the documentation-slug case above. What's still reliable is the
+// fixed suffix shape itself: a 9-10 char run, then a 5 char run, both lowercase
+// alphanumeric.
+const KUBERNETES_RESOURCE_SUFFIX_RE = /-[a-z0-9]{9,10}-[a-z0-9]{5}$/
+
+function looksLikeKubernetesResourceName(value: string): boolean {
+  return KUBERNETES_RESOURCE_SUFFIX_RE.test(value)
+}
+
+// ssh-keygen prints public host-key fingerprints as "SHA256:<base64 body>" (colon, not
+// the hyphen INTEGRITY_HASH_PREFIX_RE expects). Since ":" is a hard delimiter for this
+// tokenizer, the prefix and body would otherwise land in separate tokens and the body
+// alone can read as a bare high-entropy value -- but a host-key fingerprint is public
+// verification data, not a secret, and masking it would hide what the user needs to
+// verify the connection. Strip these spans before tokenizing, same approach as
+// placeholder-stripping above.
+const SSH_FINGERPRINT_RE = /\bSHA(?:1|256):[A-Za-z0-9+/=]{20,}\b/gi
+
+// A bare secret followed immediately by sentence punctuation ("...token: aB3x...j.")
+// would otherwise bind that punctuation as part of the secret's own value, since "."
+// is kept in the charset above for JWTs and similar. Only strip it from the very end of
+// a candidate (not internally), so a JWT's "header.payload.signature" dots -- which are
+// never the last character of a real token -- are left alone.
+//
+// Trailing "."/"!"/"?" is genuinely ambiguous: it could be sentence punctuation, or it
+// could be the real last character of a secret. But the two are NOT equally likely.
+// "!" is a standard password-complexity special character (deliberately in the charset
+// above for that reason) and plausibly IS the real last character. "." and "?" are
+// essentially never a deliberate final character of a real secret -- passwords rarely
+// end a complexity requirement with them, and tokens/JWTs never do. So: always strip for
+// binding purposes (below), but only additionally register the untrimmed form when the
+// stripped run is exclusively "!" -- preserving that form is what prevents a password
+// genuinely ending in "!" from leaking its last character next to the placeholder (see
+// the maskChatStreamRequest test below), while NOT doing so for "."/"?" is what keeps the
+// far more common "secret sitting in a sentence" case resolving to the correct value
+// instead of the sentence's trailing punctuation glued onto it.
+const TRAILING_SENTENCE_PUNCTUATION_RE = /[.!?]+$/
+const AMBIGUOUS_TRAILING_PUNCTUATION_RE = /^!+$/
+
+export function findBareHighEntropySecrets(text: string): SecretFinding[] {
+  const findings: SecretFinding[] = []
+  const seen = new Set<string>()
+  // Strip existing [[TAVIRAQ_SECRET_N_KIND]] placeholders before tokenizing: this
+  // split's charset drops "[" and "]", so a placeholder round-tripped back from a prior
+  // turn's conversation history would otherwise expose its bare "TAVIRAQ_SECRET_N_KIND"
+  // body as a fresh "secret" -- re-wrapping the original placeholder into a broken
+  // nested one and breaking resolveSecretPlaceholders() for local command execution.
+  const scanText = text
+    .replace(SECRET_PLACEHOLDER_GLOBAL_RE, ' ')
+    .replace(SSH_FINGERPRINT_RE, ' ')
+
+  for (const rawValue of scanText.split(BARE_ENTROPY_TOKEN_SPLIT_RE)) {
+    if (findings.length >= BARE_SECRET_MAX_MATCHES) break
+
+    const value = rawValue.replace(TRAILING_SENTENCE_PUNCTUATION_RE, '')
+    // Dedupe before the cap, not after: registerFinding() only dedupes once findings
+    // reach the shared context, which is too late here. Without this, N repeats of the
+    // same value (a retried command echoing the same token) would burn the whole cap
+    // on duplicates and starve out a later, different secret in the same scan.
+    if (seen.has(value)) continue
+    if (INTEGRITY_HASH_PREFIX_RE.test(value)) continue
+    if (looksLikeFilename(value)) continue
+    if (looksLikeExtensionlessRelativePath(value)) continue
+    if (looksLikeVersionedArtifactName(value)) continue
+    if (looksLikeHostname(value)) continue
+    if (looksLikeLowEntropySlug(value)) continue
+    if (looksLikeKubernetesResourceName(value)) continue
+    if (!looksHighEntropy(value)) continue
+
+    seen.add(value)
+    findings.push({
+      ruleId: 'taviraq-bare-high-entropy',
+      description: 'Taviraq bare high-entropy value',
+      secret: value,
+      match: value
+    })
+
+    if (rawValue !== value && !seen.has(rawValue) && findings.length < BARE_SECRET_MAX_MATCHES) {
+      const strippedSuffix = rawValue.slice(value.length)
+      if (AMBIGUOUS_TRAILING_PUNCTUATION_RE.test(strippedSuffix)) {
+        seen.add(rawValue)
+        findings.push({
+          ruleId: 'taviraq-bare-high-entropy',
+          description: 'Taviraq bare high-entropy value',
+          secret: rawValue,
+          match: rawValue
+        })
+      }
     }
   }
 
@@ -591,7 +844,12 @@ function looksHighEntropy(value: string): boolean {
   const hasUpper = /[A-Z]/.test(value)
   const hasLower = /[a-z]/.test(value)
   const hasDigit = /[0-9]/.test(value)
-  const hasTokenPunctuation = /[._~+/=-]/.test(value)
+  // "!#$%" are standard password-complexity special characters (see
+  // BARE_ENTROPY_TOKEN_SPLIT_RE below, which deliberately keeps them in one token for the
+  // same reason) -- a lowercase-only generated password built from digits and only these
+  // symbols has neither mixed case nor any of the other punctuation here, so it needs
+  // them counted too or it never reads as high entropy at all.
+  const hasTokenPunctuation = /[._~+/=!#$%-]/.test(value)
   return hasDigit && ((hasUpper && hasLower) || hasTokenPunctuation)
 }
 

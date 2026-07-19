@@ -5,6 +5,7 @@ export const SECRET_MASKING_AUDIT_LIMIT = 80
 export const CUSTOM_SECRET_PATTERN_MAX_LENGTH = 180
 export const CUSTOM_SECRET_SCAN_MAX_TEXT_LENGTH = 20_000
 export const CUSTOM_SECRET_PATTERN_MAX_MATCHES = 40
+export const BARE_SECRET_MAX_MATCHES = 40
 
 export function createDefaultSecretMaskingSettings(): SecretMaskingSettings {
   return {
