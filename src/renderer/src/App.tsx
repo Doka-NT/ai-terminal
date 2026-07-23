@@ -545,7 +545,11 @@ export function App(): JSX.Element {
   const confirmBlockRerun = useCallback((): void => {
     if (!pendingBlockRerun) return
 
-    void window.api.command.runConfirmed(pendingBlockRerun.sessionId, pendingBlockRerun.command)
+    const { sessionId, command } = pendingBlockRerun
+    void (async () => {
+      await window.api.command.approve(sessionId, command)
+      await window.api.command.runConfirmed(sessionId, command)
+    })()
     setPendingBlockRerun(null)
   }, [pendingBlockRerun])
 

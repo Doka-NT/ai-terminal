@@ -88,6 +88,15 @@ if (userDataDir) {
 
 let mainWindow: BrowserWindow | undefined
 let aboutWindow: BrowserWindow | undefined
+const pendingApprovedCommands = new Map<string, Set<string>>()
+
+// Canonical key for matching an approved command against the one actually run.
+// The renderer trims the confirmed command, but heredocs and LLM-proposed
+// commands routinely carry CRLF line endings and trailing whitespace; matching
+// raw strings would spuriously reject an approved command as "not approved".
+function normalizeApprovalKey(command: string): string {
+  return command.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
+}
 let isQuitting = false
 let currentHideShortcut = ''
 let isRecordingShortcut = false
@@ -780,6 +789,9 @@ async function createWindow(): Promise<void> {
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
+      // sandbox: true is incompatible with the ESM preload (.mjs): Electron's sandboxed
+      // preload context does not support ES module syntax. Sandbox hardening requires
+      // converting the preload to CJS first (tracked separately).
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
@@ -805,6 +817,12 @@ async function createWindow(): Promise<void> {
       console.error('[open external url failed]', error)
     })
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('app://') && !url.startsWith('file://')) {
+      event.preventDefault()
+    }
   })
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -1322,9 +1340,22 @@ ipcMain.handle('app:openExternalUrl', (_event, url: string) => {
 
   ipcMain.handle('command:propose', (_event, text: string) => extractCommandProposals(text))
 
+  ipcMain.handle('command:approve', (_event, sessionId: string, command: string) => {
+    if (!pendingApprovedCommands.has(sessionId)) {
+      pendingApprovedCommands.set(sessionId, new Set())
+    }
+    pendingApprovedCommands.get(sessionId)!.add(normalizeApprovalKey(command))
+  })
+
   ipcMain.handle('command:runConfirmed', (_event, sessionId: string, command: string) => {
+    const approved = pendingApprovedCommands.get(sessionId)
+    const resolvedCommand = resolveSecretPlaceholders(command, secretContextsBySession.get(sessionId))
+    const approvalKey = normalizeApprovalKey(command)
+    if (!approved?.has(approvalKey)) {
+      throw new Error('Command was not approved before execution.')
+    }
+    approved.delete(approvalKey)
     try {
-      const resolvedCommand = resolveSecretPlaceholders(command, secretContextsBySession.get(sessionId))
       terminalManager.runConfirmed(sessionId, resolvedCommand, command)
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Unable to resolve local secret placeholders.')

@@ -222,6 +222,8 @@ const api = {
   },
   command: {
     propose: (text: string) => ipcRenderer.invoke('command:propose', text) as Promise<CommandProposal[]>,
+    approve: (sessionId: string, command: string) =>
+      ipcRenderer.invoke('command:approve', sessionId, command) as Promise<void>,
     runConfirmed: (sessionId: string, command: string) =>
       ipcRenderer.invoke('command:runConfirmed', sessionId, command) as Promise<void>
   },

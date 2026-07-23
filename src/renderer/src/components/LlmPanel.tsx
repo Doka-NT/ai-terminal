@@ -2232,6 +2232,7 @@ export function LlmPanel({
     })
 
     runningCommandsRef.current.add(sessionId)
+    await window.api.command.approve(session.id, command)
     void window.api.command.runConfirmed(session.id, command).catch((error: unknown) => {
       updateThread(sessionId, (thread) => ({ ...thread, status: { tone: 'danger', label: `Command failed: ${error instanceof Error ? error.message : String(error)}` } }))
       stopAgentic(sessionId)
@@ -2411,6 +2412,7 @@ export function LlmPanel({
       promptResolversRef.current.set(session.id, finish)
     })
 
+    await window.api.command.approve(session.id, confirmedCommand)
     void window.api.command.runConfirmed(session.id, confirmedCommand).catch((error: unknown) => {
       updateThread(session.id, (thread) => ({
         ...thread,
