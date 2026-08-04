@@ -43,7 +43,7 @@
     "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "undici": "^6.27.0"
+    "undici": "^6.28.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
