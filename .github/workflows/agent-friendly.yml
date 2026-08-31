@@ -15,6 +15,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: hsnice16/agent-friendly-action@9b3a096a3f7f3de005216abd14bacfc4d89e8f2a # v0
+      - uses: hsnice16/agent-friendly-action@c940703e128f654023c8241bb2cdfb267a097dc8 # v0
         with:
           agents-badge-token: ${{ secrets.AGENTS_BADGE_TOKEN }}
